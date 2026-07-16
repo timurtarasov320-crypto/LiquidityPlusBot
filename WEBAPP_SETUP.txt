@@ -1,0 +1,48 @@
+LIQUIDITYPLUS V5 WEBAPP MVP
+
+1. Что добавлено
+- Telegram Mini App / WebApp.
+- Dashboard с BTC, ETH и SOL.
+- Профиль пользователя.
+- История сигналов и статистика.
+- AI Scanner UI.
+- Проверка Telegram initData.
+- API читает существующие users.db и signals.db.
+- Кнопка «Открыть Liquidity App» и команда /app.
+
+2. Локальный запуск WebApp
+Установите зависимости:
+    py -m pip install -r requirements.txt
+
+Запустите сервер:
+    py webapp_server.py
+
+Откройте:
+    http://127.0.0.1:8080
+
+По умолчанию включён WEBAPP_DEMO_MODE=1, поэтому локально показывается демо.
+
+3. Запуск внутри Telegram
+Telegram требует HTTPS URL.
+
+- Разместите проект на VPS / Render / Railway / другой платформе.
+- Запустите webapp_server.py.
+- Укажите HTTPS адрес в config.py:
+    WEBAPP_URL = "https://ваш-домен"
+- Перезапустите bot.py.
+- Отправьте /start или /app.
+
+4. Безопасность
+Перед реальным запуском:
+- смените BOT_TOKEN;
+- отключите демо:
+    WEBAPP_DEMO_MODE=0
+- используйте HTTPS;
+- не публикуйте базы и config.py.
+
+5. Следующий этап
+- реальные настройки из WebApp;
+- покупка VIP внутри приложения;
+- запуск AI Scanner через API;
+- графики доходности;
+- админ-WebApp.

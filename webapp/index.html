@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#070707">
+  <title>LiquidityPlus</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <div class="glow glow-a"></div>
+  <div class="glow glow-b"></div>
+
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">LIQUIDITY PLUS</div>
+        <h1>Trading Terminal</h1>
+      </div>
+      <div class="status"><span></span> LIVE</div>
+    </header>
+
+    <section class="hero card">
+      <div>
+        <p class="muted" id="welcome">Добро пожаловать</p>
+        <h2 id="user-name">Trader</h2>
+        <div class="badges">
+          <span class="badge premium" id="account-level">STANDARD</span>
+          <span class="badge" id="vip-status">VIP OFF</span>
+        </div>
+      </div>
+      <div class="score-ring" id="winrate-ring">
+        <div><strong id="winrate">0%</strong><small>WIN RATE</small></div>
+      </div>
+    </section>
+
+    <section class="market-grid">
+      <article class="ticker card">
+        <span>BTC</span><strong id="btc-price">—</strong><small id="btc-change">—</small>
+      </article>
+      <article class="ticker card">
+        <span>ETH</span><strong id="eth-price">—</strong><small id="eth-change">—</small>
+      </article>
+      <article class="ticker card">
+        <span>SOL</span><strong id="sol-price">—</strong><small id="sol-change">—</small>
+      </article>
+    </section>
+
+    <section class="stats card">
+      <div><small>Активные</small><strong id="active-signals">0</strong></div>
+      <div><small>Сигналов</small><strong id="total-signals">0</strong></div>
+      <div><small>Результат</small><strong id="total-result">0%</strong></div>
+      <div><small>Партнёры</small><strong id="referrals">0</strong></div>
+    </section>
+
+    <nav class="tabs">
+      <button class="tab active" data-page="dashboard">Обзор</button>
+      <button class="tab" data-page="signals">Сигналы</button>
+      <button class="tab" data-page="scanner">AI Scanner</button>
+      <button class="tab" data-page="profile">Профиль</button>
+    </nav>
+
+    <section class="page active" id="page-dashboard">
+      <article class="card system-card">
+        <div class="section-title"><h3>System Status</h3><span>ONLINE</span></div>
+        <div class="system-row"><span>AI Scanner</span><b class="online">ONLINE</b></div>
+        <div class="system-row"><span>Order Flow</span><b class="online">ONLINE</b></div>
+        <div class="system-row"><span>Signal Monitor</span><b class="online">ACTIVE</b></div>
+      </article>
+
+      <article class="card">
+        <div class="section-title"><h3>Последние сигналы</h3></div>
+        <div id="recent-signals" class="signal-list">
+          <div class="empty">Загрузка данных…</div>
+        </div>
+      </article>
+    </section>
+
+    <section class="page" id="page-signals">
+      <article class="card">
+        <div class="section-title"><h3>История сигналов</h3></div>
+        <div id="all-signals" class="signal-list"></div>
+      </article>
+    </section>
+
+    <section class="page" id="page-scanner">
+      <article class="card scanner-card">
+        <div class="scanner-orb">AI</div>
+        <h3>Liquidity AI Scanner</h3>
+        <p>Funding · OI · RSI · Volume · CVD · FVG · Order Blocks · Liquidity</p>
+        <div class="progress"><i></i></div>
+        <button class="primary" id="scanner-button">Запустить анализ</button>
+        <div id="scanner-result" class="scanner-result"></div>
+      </article>
+    </section>
+
+    <section class="page" id="page-profile">
+      <article class="card profile-card">
+        <h3>Личный кабинет</h3>
+        <div class="profile-line"><span>Telegram ID</span><b id="profile-id">—</b></div>
+        <div class="profile-line"><span>VIP</span><b id="profile-vip">—</b></div>
+        <div class="profile-line"><span>Скидка</span><b id="profile-discount">0%</b></div>
+        <div class="profile-line"><span>Бесплатные сигналы</span><b id="profile-free">—</b></div>
+        <button class="primary" id="close-app">Вернуться в Telegram</button>
+      </article>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
