@@ -2,6 +2,7 @@ import asyncio
 import json
 import sqlite3
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 import aiohttp
@@ -14,6 +15,7 @@ from aiogram.types import (
     Message,
 )
 
+from admin_audit import log_event
 from config import (
     ADMIN_ID,
     CRYPTO_PAY_API_URL,
@@ -47,28 +49,72 @@ def connect_payments_db() -> sqlite3.Connection:
 
 
 def create_payment_tables() -> None:
-    conn = connect_payments_db()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS payments (
-            invoice_id INTEGER PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            plan_code TEXT NOT NULL,
-            amount REAL NOT NULL,
-            asset TEXT NOT NULL DEFAULT 'USDT',
-            status TEXT NOT NULL DEFAULT 'active',
-            payload TEXT,
-            created_at TEXT NOT NULL,
-            paid_at TEXT,
-            activated INTEGER NOT NULL DEFAULT 0
+    """Создаёт и безопасно обновляет таблицу платежей."""
+    with connect_payments_db() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payments (
+                invoice_id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                plan_code TEXT NOT NULL,
+                amount REAL NOT NULL,
+                asset TEXT NOT NULL DEFAULT 'USDT',
+                status TEXT NOT NULL DEFAULT 'active',
+                payload TEXT,
+                created_at TEXT NOT NULL,
+                paid_at TEXT,
+                activated INTEGER NOT NULL DEFAULT 0,
+                original_amount REAL,
+                discount_percent INTEGER NOT NULL DEFAULT 0,
+                activated_at TEXT,
+                cancelled_at TEXT
+            )
+            """
         )
-        """
-    )
 
-    conn.commit()
-    conn.close()
+        columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(payments)"
+            ).fetchall()
+        }
+
+        migrations = {
+            "original_amount": (
+                "ALTER TABLE payments "
+                "ADD COLUMN original_amount REAL"
+            ),
+            "discount_percent": (
+                "ALTER TABLE payments "
+                "ADD COLUMN discount_percent INTEGER NOT NULL DEFAULT 0"
+            ),
+            "activated_at": (
+                "ALTER TABLE payments "
+                "ADD COLUMN activated_at TEXT"
+            ),
+            "cancelled_at": (
+                "ALTER TABLE payments "
+                "ADD COLUMN cancelled_at TEXT"
+            ),
+        }
+
+        for column_name, sql in migrations.items():
+            if column_name not in columns:
+                conn.execute(sql)
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payments_user
+            ON payments(user_id, created_at DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payments_pending
+            ON payments(activated, status)
+            """
+        )
+        conn.commit()
 
 
 def save_invoice(
@@ -78,71 +124,70 @@ def save_invoice(
     amount: float,
     asset: str,
     payload: str,
+    original_amount: float,
+    discount_percent: int,
 ) -> None:
-    conn = connect_payments_db()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        INSERT OR REPLACE INTO payments (
-            invoice_id,
-            user_id,
-            plan_code,
-            amount,
-            asset,
-            status,
-            payload,
-            created_at,
-            paid_at,
-            activated
+    with connect_payments_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO payments (
+                invoice_id,
+                user_id,
+                plan_code,
+                amount,
+                asset,
+                status,
+                payload,
+                created_at,
+                paid_at,
+                activated,
+                original_amount,
+                discount_percent,
+                activated_at,
+                cancelled_at
+            )
+            VALUES (?, ?, ?, ?, ?, 'active', ?, ?, NULL, 0, ?, ?, NULL, NULL)
+            ON CONFLICT(invoice_id) DO NOTHING
+            """,
+            (
+                invoice_id,
+                user_id,
+                plan_code,
+                amount,
+                asset,
+                payload,
+                datetime.now(timezone.utc).isoformat(),
+                original_amount,
+                max(0, min(int(discount_percent), 55)),
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, 'active', ?, ?, NULL, 0)
-        """,
-        (
-            invoice_id,
-            user_id,
-            plan_code,
-            amount,
-            asset,
-            payload,
-            datetime.now(timezone.utc).isoformat(),
-        ),
-    )
-
-    conn.commit()
-    conn.close()
+        conn.commit()
 
 
 def get_payment(invoice_id: int):
-    conn = connect_payments_db()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        SELECT
-            invoice_id,
-            user_id,
-            plan_code,
-            amount,
-            asset,
-            status,
-            payload,
-            created_at,
-            paid_at,
-            activated
-        FROM payments
-        WHERE invoice_id = ?
-        """,
-        (invoice_id,),
-    )
-
-    payment = cursor.fetchone()
-    conn.close()
-
-    if payment is None:
-        return None
-
-    return tuple(payment)
+    with connect_payments_db() as conn:
+        return conn.execute(
+            """
+            SELECT
+                invoice_id,
+                user_id,
+                plan_code,
+                amount,
+                asset,
+                status,
+                payload,
+                created_at,
+                paid_at,
+                activated,
+                original_amount,
+                discount_percent,
+                activated_at,
+                cancelled_at
+            FROM payments
+            WHERE invoice_id = ?
+            """,
+            (invoice_id,),
+        ).fetchone()
 
 
 def update_payment_status(
@@ -150,60 +195,116 @@ def update_payment_status(
     status: str,
     paid_at: Optional[str] = None,
 ) -> None:
-    conn = connect_payments_db()
-    cursor = conn.cursor()
+    with connect_payments_db() as conn:
+        conn.execute(
+            """
+            UPDATE payments
+            SET status = ?, paid_at = COALESCE(?, paid_at)
+            WHERE invoice_id = ?
+            """,
+            (status, paid_at, invoice_id),
+        )
+        conn.commit()
 
-    cursor.execute(
-        """
-        UPDATE payments
-        SET status = ?, paid_at = COALESCE(?, paid_at)
-        WHERE invoice_id = ?
-        """,
-        (
-            status,
-            paid_at,
-            invoice_id,
-        ),
-    )
 
-    conn.commit()
-    conn.close()
+def claim_payment_activation(invoice_id: int) -> bool:
+    """Атомарно резервирует счёт для активации VIP.
+
+    activated: 0 = не обработан, 2 = обрабатывается, 1 = активирован.
+    """
+    with connect_payments_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE payments
+            SET activated = 2
+            WHERE invoice_id = ?
+              AND activated = 0
+              AND status = 'paid'
+            """,
+            (invoice_id,),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def release_payment_activation(invoice_id: int) -> None:
+    with connect_payments_db() as conn:
+        conn.execute(
+            """
+            UPDATE payments
+            SET activated = 0
+            WHERE invoice_id = ? AND activated = 2
+            """,
+            (invoice_id,),
+        )
+        conn.commit()
 
 
 def mark_payment_activated(invoice_id: int) -> None:
-    conn = connect_payments_db()
-    cursor = conn.cursor()
+    with connect_payments_db() as conn:
+        conn.execute(
+            """
+            UPDATE payments
+            SET activated = 1,
+                activated_at = ?
+            WHERE invoice_id = ? AND activated = 2
+            """,
+            (
+                datetime.now(timezone.utc).isoformat(),
+                invoice_id,
+            ),
+        )
+        conn.commit()
 
-    cursor.execute(
-        """
-        UPDATE payments
-        SET activated = 1
-        WHERE invoice_id = ?
-        """,
-        (invoice_id,),
-    )
 
-    conn.commit()
-    conn.close()
+def cancel_local_payment(invoice_id: int, user_id: int) -> bool:
+    with connect_payments_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE payments
+            SET status = 'cancelled',
+                cancelled_at = ?
+            WHERE invoice_id = ?
+              AND user_id = ?
+              AND activated = 0
+              AND status = 'active'
+            """,
+            (
+                datetime.now(timezone.utc).isoformat(),
+                invoice_id,
+                user_id,
+            ),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
 
 
 def get_pending_invoice_ids() -> list[int]:
-    conn = connect_payments_db()
-    cursor = conn.cursor()
+    with connect_payments_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT invoice_id
+            FROM payments
+            WHERE activated = 0
+              AND status IN ('active', 'paid')
+            ORDER BY created_at ASC
+            """
+        ).fetchall()
+    return [int(row[0]) for row in rows]
 
-    cursor.execute(
-        """
-        SELECT invoice_id
-        FROM payments
-        WHERE activated = 0
-          AND status IN ('active', 'paid')
-        ORDER BY created_at ASC
-        """
-    )
 
-    invoice_ids = [int(row[0]) for row in cursor.fetchall()]
-    conn.close()
-    return invoice_ids
+def get_recent_payments(limit: int = 20):
+    safe_limit = max(1, min(int(limit), 100))
+    with connect_payments_db() as conn:
+        return conn.execute(
+            """
+            SELECT *
+            FROM payments
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
 
 
 async def automatic_payment_monitor(bot) -> None:
@@ -251,6 +352,16 @@ async def crypto_pay_request(
     method: str,
     data: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    if not CRYPTO_PAY_TOKEN:
+        raise RuntimeError(
+            "CRYPTO_PAY_TOKEN не задан в config.py или Environment."
+        )
+
+    if not CRYPTO_PAY_API_URL:
+        raise RuntimeError(
+            "CRYPTO_PAY_API_URL не задан."
+        )
+
     api_url = CRYPTO_PAY_API_URL.rstrip("/")
     url = f"{api_url}/{method}"
 
@@ -305,6 +416,7 @@ async def create_crypto_invoice(
     user_id: int,
     plan_code: str,
     amount: float,
+    discount_percent: int,
 ) -> dict[str, Any]:
     plan = get_plan(plan_code)
 
@@ -348,6 +460,8 @@ async def create_crypto_invoice(
         amount=amount,
         asset="USDT",
         payload=payload,
+        original_amount=plan.price_usd,
+        discount_percent=discount_percent,
     )
 
     return invoice
@@ -381,17 +495,23 @@ async def activate_paid_invoice(
 
     payment_user_id = int(payment[1])
     plan_code = str(payment[2])
-    already_activated = bool(payment[9])
+    local_amount = Decimal(str(payment[3])).quantize(Decimal("0.01"))
+    local_asset = str(payment[4]).upper()
+    local_payload = str(payment[6] or "")
+    activation_state = int(payment[9] or 0)
 
-    if already_activated:
+    if activation_state == 1:
         return True, "Подписка по этому счёту уже активирована."
+
+    if activation_state == 2:
+        return False, "Платёж уже обрабатывается. Повторите через несколько секунд."
 
     invoice = await get_crypto_invoice(invoice_id)
 
     if invoice is None:
         return False, "Счёт не найден в Crypto Pay."
 
-    status = invoice.get("status", "unknown")
+    status = str(invoice.get("status", "unknown"))
     paid_at = invoice.get("paid_at")
 
     update_payment_status(
@@ -404,44 +524,86 @@ async def activate_paid_invoice(
         return False, "Оплата ещё не поступила."
 
     if status == "expired":
-        return False, "Срок оплаты счёта истёк."
+        return False, "Срок оплаты счёта истёк. Создайте новый счёт."
 
     if status != "paid":
         return False, f"Статус счёта: {status}"
 
-    current_end = get_vip_until(payment_user_id)
+    remote_asset = str(invoice.get("asset") or "").upper()
+    remote_payload = str(invoice.get("payload") or "")
 
-    new_end = calculate_subscription_end(
-        plan_code=plan_code,
-        current_end=current_end,
-    )
+    try:
+        remote_amount = Decimal(
+            str(invoice.get("amount"))
+        ).quantize(Decimal("0.01"))
+    except (InvalidOperation, TypeError):
+        return False, "Crypto Pay вернул неправильную сумму счёта."
 
-    if new_end is None:
-        return False, "Не удалось рассчитать срок VIP."
+    if remote_asset != local_asset:
+        return False, "Валюта оплаченного счёта не совпадает."
 
-    activated = activate_subscription(
-        user_id=payment_user_id,
-        plan_code=plan_code,
-        vip_until=new_end,
-    )
+    if remote_amount != local_amount:
+        return False, "Сумма оплаченного счёта не совпадает."
 
-    if not activated:
-        return False, "Не удалось активировать VIP."
+    if remote_payload != local_payload:
+        return False, "Данные оплаченного счёта не совпадают."
 
-    mark_payment_activated(invoice_id)
+    try:
+        payload_data = json.loads(local_payload)
+    except json.JSONDecodeError:
+        return False, "Повреждены данные платежа."
+
+    if (
+        int(payload_data.get("user_id", 0)) != payment_user_id
+        or str(payload_data.get("plan_code")) != plan_code
+    ):
+        return False, "Счёт не соответствует выбранному тарифу."
+
+    if not claim_payment_activation(invoice_id):
+        current = get_payment(invoice_id)
+        if current and int(current[9] or 0) == 1:
+            return True, "Подписка по этому счёту уже активирована."
+        return False, "Платёж уже обрабатывается."
+
+    try:
+        current_end = get_vip_until(payment_user_id)
+        new_end = calculate_subscription_end(
+            plan_code=plan_code,
+            current_end=current_end,
+        )
+
+        if new_end is None:
+            raise RuntimeError("Не удалось рассчитать срок VIP.")
+
+        activated = activate_subscription(
+            user_id=payment_user_id,
+            plan_code=plan_code,
+            vip_until=new_end,
+        )
+
+        if not activated:
+            raise RuntimeError("Не удалось активировать VIP.")
+
+        mark_payment_activated(invoice_id)
+        log_event("payment_activated", None, user_id, invoice_id=invoice_id, plan=plan_code, amount=float(local_amount), asset=local_asset)
+
+    except Exception:
+        release_payment_activation(invoice_id)
+        raise
 
     plan = get_plan(plan_code)
     plan_title = plan.title if plan else plan_code
-
-    end_text = new_end.strftime(
-        "%d.%m.%Y %H:%M UTC"
-    )
+    end_text = new_end.strftime("%d.%m.%Y %H:%M UTC")
 
     return (
         True,
-        "✅ Оплата подтверждена!\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "✅ ОПЛАТА ПОДТВЕРЖДЕНА\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Тариф: {plan_title}\n"
-        f"VIP действует до: {end_text}",
+        f"Оплачено: {local_amount:.2f} {local_asset}\n"
+        f"VIP действует до: {end_text}\n\n"
+        "Доступ активирован автоматически.",
     )
 
 
@@ -481,6 +643,12 @@ def invoice_keyboard(
                     callback_data=(
                         f"check_payment:{invoice_id}"
                     ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отменить счёт",
+                    callback_data=f"cancel_payment:{invoice_id}",
                 )
             ],
             [
@@ -549,6 +717,7 @@ async def create_payment(
             user_id=callback.from_user.id,
             plan_code=plan_code,
             amount=final_price,
+            discount_percent=discount,
         )
     except (RuntimeError, ValueError) as error:
         await callback.message.answer(
@@ -586,6 +755,57 @@ async def create_payment(
             payment_url=payment_url,
         ),
     )
+
+
+@router.callback_query(
+    F.data.startswith("cancel_payment:")
+)
+async def cancel_payment(callback: CallbackQuery):
+    try:
+        invoice_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Неправильный счёт.", show_alert=True)
+        return
+
+    payment = get_payment(invoice_id)
+    if payment is None or int(payment[1]) != callback.from_user.id:
+        await callback.answer("Платёж не найден.", show_alert=True)
+        return
+
+    if int(payment[9] or 0) == 1:
+        await callback.answer(
+            "Оплаченный счёт нельзя отменить.",
+            show_alert=True,
+        )
+        return
+
+    cancelled = cancel_local_payment(
+        invoice_id,
+        callback.from_user.id,
+    )
+
+    if not cancelled:
+        await callback.answer(
+            "Счёт уже оплачен, истёк или отменён.",
+            show_alert=True,
+        )
+        return
+
+    await update_payment_screen(
+        callback,
+        "❌ Счёт отменён.\n\nМожно выбрать тариф и создать новый счёт.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="💎 Выбрать тариф",
+                        callback_data="vip_plans",
+                    )
+                ]
+            ]
+        ),
+    )
+    await callback.answer("Счёт отменён.")
 
 
 @router.callback_query(
@@ -671,6 +891,28 @@ async def crypto_test(message: Message):
         f"Приложение: {app.get('name', 'не указано')}\n"
         f"ID: {app.get('app_id', 'не указан')}"
     )
+
+
+@router.message(Command("payments"))
+async def payments_history(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    rows = get_recent_payments(15)
+    if not rows:
+        await message.answer("Платежей пока нет.")
+        return
+
+    lines = ["💳 ПОСЛЕДНИЕ ПЛАТЕЖИ", ""]
+    for row in rows:
+        activation = int(row["activated"] or 0)
+        state = "✅ VIP" if activation == 1 else str(row["status"]).upper()
+        lines.append(
+            f"#{row['invoice_id']} | {row['user_id']} | "
+            f"{row['plan_code']} | {row['amount']:.2f} {row['asset']} | {state}"
+        )
+
+    await message.answer("\n".join(lines))
 
 
 @router.message(Command("payment"))

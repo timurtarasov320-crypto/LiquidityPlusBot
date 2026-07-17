@@ -1000,3 +1000,50 @@ def close_trading_signal_by_source(
 
 
 init_signal_tracking_tables()
+
+
+def get_referral_rank(user_id: int) -> int:
+    conn = connect()
+    cursor = conn.cursor()
+    cursor.execute("SELECT referrals FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    if row is None:
+        conn.close()
+        return 0
+    referrals = int(row["referrals"] or 0)
+    cursor.execute(
+        "SELECT COUNT(*) FROM users WHERE referrals > ?",
+        (referrals,),
+    )
+    rank = int(cursor.fetchone()[0]) + 1
+    conn.close()
+    return rank
+
+
+def get_project_growth_stats() -> dict[str, int]:
+    conn = connect()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN datetime(reg_date) >= datetime('now', '-1 day') THEN 1 ELSE 0 END) AS day,
+            SUM(CASE WHEN datetime(reg_date) >= datetime('now', '-7 day') THEN 1 ELSE 0 END) AS week,
+            SUM(CASE WHEN datetime(reg_date) >= datetime('now', '-30 day') THEN 1 ELSE 0 END) AS month,
+            SUM(CASE WHEN vip = 1 THEN 1 ELSE 0 END) AS vip,
+            SUM(CASE WHEN blocked = 1 THEN 1 ELSE 0 END) AS blocked,
+            COALESCE(SUM(referrals), 0) AS referrals
+        FROM users
+        """
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return {
+        "total": int(row["total"] or 0),
+        "day": int(row["day"] or 0),
+        "week": int(row["week"] or 0),
+        "month": int(row["month"] or 0),
+        "vip": int(row["vip"] or 0),
+        "blocked": int(row["blocked"] or 0),
+        "referrals": int(row["referrals"] or 0),
+    }

@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -25,8 +26,8 @@ from market_assistant import (
 )
 
 
-MAX_AUTO_SETUPS = 5
-DUPLICATE_COOLDOWN_MINUTES = 60
+MAX_AUTO_SETUPS = max(1, int(os.getenv("AUTOSCAN_MAX_SETUPS", "5")))
+DUPLICATE_COOLDOWN_MINUTES = max(5, int(os.getenv("AUTOSCAN_DUPLICATE_MINUTES", "60")))
 ANTIDUPLICATE_DB_NAME = "autoscan_settings.db"
 
 _scan_lock = asyncio.Lock()

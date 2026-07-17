@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -22,6 +23,15 @@ from free_signals import (
 from signals import (
     get_user_signal_history,
     get_user_signal_statistics,
+)
+from market_hub import (
+    get_derivative_confirmations,
+    get_fear_greed,
+    get_global_market,
+    get_markets,
+    get_news,
+    _market_score,
+    _news_impact,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -155,6 +165,46 @@ async def dashboard(request: web.Request) -> web.Response:
     return web.json_response(response)
 
 
+async def professional_market(request: web.Request) -> web.Response:
+    validate_init_data(request.headers.get("X-Telegram-Init-Data", ""))
+    global_data, markets, fear, derivatives, news = await asyncio.gather(
+        get_global_market(),
+        get_markets(),
+        get_fear_greed(),
+        get_derivative_confirmations(),
+        get_news(),
+    )
+    fear_value = int(fear.get("value", 0) or 0)
+    score, score_label = _market_score(derivatives, fear_value)
+    dominance = global_data.get("market_cap_percentage", {})
+    eligible = [m for m in markets if m.get("price_change_percentage_24h") is not None]
+    gainers = sorted(eligible, key=lambda x: x["price_change_percentage_24h"], reverse=True)[:5]
+    losers = sorted(eligible, key=lambda x: x["price_change_percentage_24h"])[:5]
+    news_payload = []
+    for item in news[:8]:
+        impact, explanation = _news_impact(item.title)
+        news_payload.append({
+            "title": item.title, "url": item.url, "source": item.source,
+            "published": item.published, "impact": impact, "explanation": explanation,
+        })
+    return web.json_response({
+        "overview": {
+            "market_cap": global_data.get("total_market_cap", {}).get("usd", 0),
+            "volume": global_data.get("total_volume", {}).get("usd", 0),
+            "market_change": global_data.get("market_cap_change_percentage_24h_usd", 0),
+            "btc_dominance": dominance.get("btc", 0),
+            "eth_dominance": dominance.get("eth", 0),
+            "fear_greed": fear_value,
+            "fear_label": fear.get("value_classification", ""),
+            "score": score, "score_label": score_label,
+        },
+        "derivatives": derivatives,
+        "gainers": [{"symbol": x.get("symbol", "").upper(), "change": x.get("price_change_percentage_24h", 0)} for x in gainers],
+        "losers": [{"symbol": x.get("symbol", "").upper(), "change": x.get("price_change_percentage_24h", 0)} for x in losers],
+        "news": news_payload,
+    })
+
+
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(WEBAPP_DIR / "index.html")
 
@@ -163,6 +213,7 @@ def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", index)
     app.router.add_get("/api/dashboard", dashboard)
+    app.router.add_get("/api/market-pro", professional_market)
     app.router.add_static(
         "/static/",
         WEBAPP_DIR,

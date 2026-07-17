@@ -14,9 +14,12 @@ from aiogram.types import (
 )
 
 from config import ADMIN_ID
+from admin_audit import create_audit_table, get_recent_events, log_event
 from database import (
     activate_subscription,
     get_all_users,
+    get_project_growth_stats,
+    get_top_referrers,
     get_user,
     search_users,
     set_blocked,
@@ -113,6 +116,10 @@ def admin_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="👥 Аудитория", callback_data="admin:users"),
             ],
             [
+                InlineKeyboardButton(text="💳 Оплаты", callback_data="admin:payments"),
+                InlineKeyboardButton(text="🏆 Рефералы", callback_data="admin:referrals"),
+            ],
+            [
                 InlineKeyboardButton(text="🔎 Найти пользователя", callback_data="admin:search"),
             ],
             [
@@ -128,10 +135,8 @@ def admin_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📈 Новый сигнал", callback_data="admin:signal_builder"),
             ],
             [
-                InlineKeyboardButton(
-                    text="📡 Signal Control",
-                    callback_data="admin:tracking",
-                )
+                InlineKeyboardButton(text="📡 Signal Control", callback_data="admin:tracking"),
+                InlineKeyboardButton(text="🧾 Журнал", callback_data="admin:audit"),
             ],
             [
                 InlineKeyboardButton(text="🔄 Обновить данные", callback_data="admin:home"),
@@ -274,6 +279,7 @@ async def ensure_admin_callback(callback: CallbackQuery) -> bool:
 
 
 async def show_admin_home(target: Message | CallbackQuery) -> None:
+    create_audit_table()
     users = get_all_users()
     vip_count = sum(1 for user in users if user[4])
     blocked_count = sum(1 for user in users if len(user) > 10 and user[10])
@@ -338,25 +344,102 @@ async def admin_cancel(callback: CallbackQuery, state: FSMContext):
 async def admin_stats(callback: CallbackQuery):
     if not await ensure_admin_callback(callback):
         return
-    users = get_all_users()
-    vip = sum(1 for u in users if u[4])
-    blocked = sum(1 for u in users if len(u) > 10 and u[10])
-    referrals = sum(int(u[5] or 0) for u in users)
+    growth = get_project_growth_stats()
     invoices, revenue, paid = payment_stats()
+    conversion = (paid / invoices * 100) if invoices else 0
+    vip_share = (growth["vip"] / growth["total"] * 100) if growth["total"] else 0
     text = (
-        "📊 СТАТИСТИКА ПРОЕКТА\n\n"
-        f"👥 Всего пользователей: {len(users)}\n"
-        f"💎 VIP-пользователей: {vip}\n"
-        f"🆓 Обычных: {len(users) - vip}\n"
-        f"🚫 Заблокированных: {blocked}\n"
-        f"🔗 Всего приглашений: {referrals}\n\n"
-        f"🧾 Создано счетов: {invoices}\n"
+        "📊 АНАЛИТИКА LIQUIDITY PLUS\n\n"
+        f"👥 Всего: {growth['total']}\n"
+        f"🆕 За 24 часа: +{growth['day']}\n"
+        f"📅 За 7 дней: +{growth['week']}\n"
+        f"🗓 За 30 дней: +{growth['month']}\n\n"
+        f"💎 Активных VIP: {growth['vip']} ({vip_share:.1f}%)\n"
+        f"🚫 Заблокировано: {growth['blocked']}\n"
+        f"🔗 Приглашений: {growth['referrals']}\n\n"
+        f"🧾 Счетов: {invoices}\n"
         f"✅ Оплачено: {paid}\n"
+        f"📈 Конверсия оплаты: {conversion:.1f}%\n"
         f"💰 Выручка: ${revenue:.2f}"
     )
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:home")]]
     ))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:payments")
+async def admin_payments(callback: CallbackQuery):
+    if not await ensure_admin_callback(callback):
+        return
+    try:
+        conn = sqlite3.connect("payments.db")
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT invoice_id, user_id, plan_code, amount, asset, status, created_at "
+            "FROM payments ORDER BY created_at DESC LIMIT 12"
+        ).fetchall()
+        conn.close()
+    except sqlite3.Error:
+        rows = []
+    lines = ["💳 ПОСЛЕДНИЕ ОПЛАТЫ", ""]
+    for row in rows:
+        icon = "✅" if row["status"] == "paid" else "⏳" if row["status"] == "active" else "❌"
+        lines.append(f"{icon} #{row['invoice_id']} | {row['user_id']} | {row['plan_code']} | {row['amount']:.2f} {row['asset']}")
+    if not rows:
+        lines.append("Платежей пока нет.")
+    await callback.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:home")]]
+    ))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:referrals")
+async def admin_referrals(callback: CallbackQuery):
+    if not await ensure_admin_callback(callback):
+        return
+    top = get_top_referrers(15)
+    lines = ["🏆 ТОП ПАРТНЁРОВ", ""]
+    for index, user in enumerate(top, 1):
+        name = f"@{user[1]}" if user[1] else (user[2] or str(user[0]))
+        lines.append(f"{index}. {name} | ID {user[0]} | {int(user[3] or 0)}")
+    if not top:
+        lines.append("Данных пока нет.")
+    await callback.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:home")]]
+    ))
+    await callback.answer()
+
+
+
+
+@router.callback_query(F.data == "admin:audit")
+async def admin_audit_log(callback: CallbackQuery):
+    if not await ensure_admin_callback(callback):
+        return
+    rows = get_recent_events(20)
+    labels = {
+        "vip_granted": "VIP выдан",
+        "vip_removed": "VIP снят",
+        "user_blocked": "пользователь заблокирован",
+        "user_unblocked": "пользователь разблокирован",
+        "broadcast_sent": "рассылка отправлена",
+        "signal_sent": "сигнал опубликован",
+        "payment_activated": "оплата активирована",
+        "referral_added": "реферал засчитан",
+    }
+    lines = ["🧾 ЖУРНАЛ ДЕЙСТВИЙ", ""]
+    for row in rows:
+        stamp = str(row["created_at"] or "").replace("T", " ")[:16]
+        action = labels.get(row["action"], row["action"])
+        target = f" → {row['target_id']}" if row["target_id"] else ""
+        lines.append(f"• {stamp} | {action}{target}")
+    if not rows:
+        lines.append("Событий пока нет.")
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:audit")], [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:home")]]),
+    )
     await callback.answer()
 
 
@@ -461,10 +544,14 @@ async def vip_days_entered(message: Message, state: FSMContext):
     if days == 0:
         ok = set_vip(user_id, 1)
         label = "бессрочно"
+        if ok:
+            log_event("vip_granted", message.from_user.id, user_id, days=0)
     else:
         until = datetime.now(timezone.utc) + timedelta(days=days)
         ok = activate_subscription(user_id, f"manual_{days}d", until)
         label = f"на {days} дней"
+        if ok:
+            log_event("vip_granted", message.from_user.id, user_id, days=days)
     await state.clear()
     await message.answer(
         f"✅ VIP выдан пользователю {user_id} {label}." if ok else "Не удалось обновить пользователя.",

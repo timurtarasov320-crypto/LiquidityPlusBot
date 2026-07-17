@@ -88,3 +88,25 @@ $("scanner-button").onclick = async ()=>{
 
 $("close-app").onclick=()=>tg?.close();
 load();
+
+function compactMoney(n){
+  n=Number(n||0); if(Math.abs(n)>=1e12)return `$${(n/1e12).toFixed(2)}T`;
+  if(Math.abs(n)>=1e9)return `$${(n/1e9).toFixed(2)}B`;
+  if(Math.abs(n)>=1e6)return `$${(n/1e6).toFixed(2)}M`; return `$${fmt(n)}`;
+}
+function impactClass(text){ return text.includes("Быч")?"var(--green)":text.includes("Медв")?"var(--red)":"var(--muted)"; }
+async function loadMarketPro(){
+  try{
+    const res=await fetch('/api/market-pro',{headers:{"X-Telegram-Init-Data":initData}});
+    if(!res.ok) throw new Error(await res.text()); const d=await res.json();
+    setText('market-score',d.overview.score); setText('market-score-label',d.overview.score_label.toUpperCase());
+    setText('fear-greed',`${d.overview.fear_greed}/100`); setText('btc-dominance',`${Number(d.overview.btc_dominance).toFixed(2)}%`);
+    setText('market-change',`${Number(d.overview.market_change)>=0?'+':''}${Number(d.overview.market_change).toFixed(2)}%`);
+    $('market-change').style.color=Number(d.overview.market_change)>=0?'var(--green)':'var(--red)';
+    $('derivatives-list').innerHTML=(d.derivatives||[]).map(x=>`<div class="derivative"><div class="derivative-head"><b>${x.symbol}</b><span style="color:${Math.abs(Number(x.funding))>=.05?'var(--red)':'var(--green)'}">${Math.abs(Number(x.funding))>=.05?'OVERHEATED':'NORMAL'}</span></div><div class="derivative-grid"><div><small>Funding</small><b>${Number(x.funding)>=0?'+':''}${Number(x.funding).toFixed(4)}%</b></div><div><small>Long/Short</small><b>${Number(x.long_short).toFixed(2)}</b></div><div><small>Open Interest</small><b>${compactMoney(x.oi).replace('$','')}</b></div></div></div>`).join('')||'<div class="empty">Нет данных</div>';
+    const movers=(id,items)=>$(id).innerHTML=(items||[]).map(x=>`<div class="mover"><b>${x.symbol}</b><span style="color:${Number(x.change)>=0?'var(--green)':'var(--red)'}">${Number(x.change)>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('');
+    movers('gainers-list',d.gainers); movers('losers-list',d.losers);
+    $('news-list').innerHTML=(d.news||[]).map(n=>`<a class="news-item" href="${n.url}" target="_blank" rel="noopener"><h4>${n.title}</h4><div class="news-meta"><span>${n.source}</span><b style="color:${impactClass(n.impact)}">${n.impact}</b></div><div class="news-explanation">${n.explanation}</div></a>`).join('')||'<div class="empty">Новостей пока нет</div>';
+  }catch(e){ console.error(e); $('derivatives-list').innerHTML='<div class="empty">Рыночные данные временно недоступны</div>'; }
+}
+loadMarketPro();

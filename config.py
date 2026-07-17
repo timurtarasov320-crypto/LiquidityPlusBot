@@ -1,13 +1,12 @@
 import os
 
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "5681851735"))
+TOKEN = "8931692248:AAExj5LidI9K8-NNcrla7EOdaMn_BRU31FU"
 
-CRYPTO_PAY_TOKEN = os.getenv("CRYPTO_PAY_TOKEN")
-CRYPTO_PAY_API_URL = os.getenv(
-    "CRYPTO_PAY_API_URL",
-    "https://pay.crypt.bot/api"
-)
+ADMIN_ID = 5681851735
+
+CRYPTO_PAY_TOKEN = "609638:AAipR6CfnwRcQvCzcJRMFwhYfYKOroV5T04"
+
+CRYPTO_PAY_API_URL = "https://pay.crypt.bot/api"
 
 CHANNELS = [
     "@liquidityplus",
@@ -15,7 +14,4 @@ CHANNELS = [
     "@skytraded",
 ]
 
-WEBAPP_URL = os.getenv(
-    "WEBAPP_URL",
-    "https://liquidityplusbot.onrender.com"
-)
+WEBAPP_URL = "https://liquidityplusbot.onrender.com"

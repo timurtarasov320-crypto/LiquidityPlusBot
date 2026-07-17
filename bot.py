@@ -4,6 +4,7 @@ import os
 from aiogram import BaseMiddleware, Bot, Dispatcher
 
 from admin import router as admin_router
+from admin_audit import create_audit_table
 from auto_scanner import automatic_market_scanner
 from auto_scanner_commands import (
     router as auto_scanner_router,
@@ -18,6 +19,7 @@ from handlers import router as handlers_router
 from market_assistant import (
     router as market_assistant_router,
 )
+from market_hub import router as market_hub_router
 from order_flow_commands import (
     router as order_flow_commands_router,
 )
@@ -58,6 +60,7 @@ dp.include_router(payments_router)
 dp.include_router(signals_router)
 dp.include_router(signal_analytics_router)
 dp.include_router(market_assistant_router)
+dp.include_router(market_hub_router)
 dp.include_router(auto_scanner_router)
 dp.include_router(autoscan_exclusion_router)
 dp.include_router(order_flow_commands_router)
@@ -81,6 +84,7 @@ DEFAULT_ORDER_FLOW_MARKETS = [
 
 async def main():
     create_tables()
+    create_audit_table()
 
     print("ПАПКА ПРОЕКТА:", os.getcwd())
     print("ФАЙЛ BOT:", os.path.abspath(__file__))

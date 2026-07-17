@@ -4,6 +4,7 @@ from pathlib import Path
 
 from aiogram import F, Router
 from aiogram.filters import CommandObject, CommandStart
+from admin_audit import log_event
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -21,10 +22,13 @@ from database import (
     add_referral,
     add_user,
     get_next_referral_level,
+    get_referral_rank,
+    get_top_referrers,
     get_total_discount,
     get_user,
     get_vip_until,
 )
+from referral import get_level, progress_bar
 from free_signals import (
     FREE_SIGNALS_LIMIT,
     get_remaining_free_signals,
@@ -417,6 +421,12 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
                     text="👥 Партнёры",
                     callback_data="menu_referrals",
                 ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⚡ Trading Hub",
+                    callback_data="menu_market_hub",
+                )
             ],
             [
                 InlineKeyboardButton(
@@ -1211,12 +1221,18 @@ async def show_referrals(callback: CallbackQuery):
         if vip_status
         else "Не активен"
     )
+    level = get_level(referral_count)
+    rank = get_referral_rank(callback.from_user.id)
+    level_progress = progress_bar(referral_count)
 
     await render_callback(
         callback,
         "━━━━━━━━━━━━━━━━━━━━\n"
         "👥 РЕФЕРАЛЬНАЯ СИСТЕМА\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Уровень: {level.title}\n"
+        f"Место в рейтинге: #{rank}\n"
+        f"Прогресс: {level_progress}\n\n"
         f"Приглашено: {referral_count}\n"
         f"Итоговая скидка: {discount}%\n"
         f"VIP-бонус: {vip_bonus}\n\n"
@@ -1237,6 +1253,12 @@ async def show_referrals(callback: CallbackQuery):
                             f"?url={referral_link}"
                             "&text=LiquidityPlus"
                         ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🏆 Рейтинг партнёров",
+                        callback_data="referral_leaderboard",
                     )
                 ],
                 [
@@ -1339,6 +1361,33 @@ async def show_history(callback: CallbackQuery):
     )
     await callback.answer()
 
+
+
+@router.callback_query(F.data == "referral_leaderboard")
+async def referral_leaderboard(callback: CallbackQuery):
+    top = get_top_referrers(10)
+    lines = [
+        "━━━━━━━━━━━━━━━━━━━━",
+        "🏆 РЕЙТИНГ ПАРТНЁРОВ",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+    medals = ["🥇", "🥈", "🥉"]
+    for index, user in enumerate(top, start=1):
+        name = f"@{user[1]}" if user[1] else (user[2] or str(user[0]))
+        prefix = medals[index - 1] if index <= 3 else f"{index}."
+        lines.append(f"{prefix} {name} — {int(user[3] or 0)}")
+    if not top:
+        lines.append("Пока никто не пригласил пользователей.")
+    await render_callback(
+        callback,
+        "\n".join(lines),
+        banner_key="referrals",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_referrals")
+        ]]),
+    )
+    await callback.answer()
 
 @router.callback_query(F.data == "menu_settings")
 async def show_settings(callback: CallbackQuery):
