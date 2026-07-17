@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl
 import aiohttp
 from aiohttp import web
 
-from config import BOT_TOKEN
+from config import TOKEN as BOT_TOKEN
 from database import (
     get_total_discount,
     get_user,
