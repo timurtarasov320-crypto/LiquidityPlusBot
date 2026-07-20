@@ -58,6 +58,7 @@
       <button class="tab active" data-page="dashboard">Обзор</button>
       <button class="tab" data-page="signals">Сигналы</button>
       <button class="tab" data-page="scanner">AI Scanner</button>
+      <button class="tab" data-page="analytics">Статистика</button>
       <button class="tab" data-page="profile">Профиль</button>
     </nav>
 
@@ -92,6 +93,32 @@
         <div class="progress"><i></i></div>
         <button class="primary" id="scanner-button">Запустить анализ</button>
         <div id="scanner-result" class="scanner-result"></div>
+      </article>
+    </section>
+
+
+    <section class="page" id="page-analytics">
+      <section class="period-grid">
+        <article class="metric card"><small>Сегодня</small><strong id="result-day">+0.00%</strong></article>
+        <article class="metric card"><small>Неделя</small><strong id="result-week">+0.00%</strong></article>
+        <article class="metric card"><small>Месяц</small><strong id="result-month">+0.00%</strong></article>
+        <article class="metric card"><small>Всё время</small><strong id="result-all">+0.00%</strong></article>
+      </section>
+      <article class="card">
+        <div class="section-title"><h3>Кривая результатов</h3><span id="curve-caption">0 сделок</span></div>
+        <div id="equity-chart" class="equity-chart"><div class="empty">Закрытых сигналов пока нет</div></div>
+      </article>
+      <article class="card">
+        <div class="section-title"><h3>Качество сигналов</h3></div>
+        <div class="quality-summary">
+          <div><small>Средний Score</small><b id="avg-score">0/100</b></div>
+          <div><small>Confidence</small><b id="avg-confidence">0%</b></div>
+          <div><small>Premium</small><b id="premium-count">0</b></div>
+        </div>
+      </article>
+      <article class="card">
+        <div class="section-title"><h3>Лучшие монеты</h3></div>
+        <div id="best-coins" class="coin-list"><div class="empty">Данных пока нет</div></div>
       </article>
     </section>
 

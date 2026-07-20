@@ -1,0 +1,20 @@
+LiquidityPlus Mini App V2.1 — установка
+
+1. Закрой запущенный bot.py на компьютере.
+2. Скопируй файлы из этого архива в папку проекта с заменой:
+   - signals.py
+   - webapp_server.py
+   - папку webapp
+3. Не удаляй свои .db, .env и config.py.
+4. В GitHub Desktop сделай Commit и Push origin.
+5. На Render Mini App оставь Start Command: python webapp_server.py
+6. После Deploy открой /health — версия должна быть 2.1.
+
+Что добавлено:
+- статистика за день, неделю, месяц и всё время;
+- кривая накопленного результата;
+- лучшие монеты по результату и Win Rate;
+- средний AI Score и Confidence;
+- расширенные карточки истории сигналов;
+- отдельный API /api/analytics;
+- данные аналитики включены в /api/dashboard.

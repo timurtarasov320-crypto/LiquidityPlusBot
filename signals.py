@@ -1540,3 +1540,91 @@ def get_user_signal_history(
     rows = cursor.fetchall()
     connection.close()
     return [dict(row) for row in rows]
+
+
+def get_user_signal_analytics(user_id: int) -> dict:
+    """Extended, recipient-scoped analytics for the Mini App."""
+    connection = connect_signals_db()
+    rows = connection.execute(
+        """
+        SELECT s.*
+        FROM signal_recipients r
+        JOIN signals s ON s.signal_id = r.signal_id
+        WHERE r.user_id = ?
+        ORDER BY s.signal_id ASC
+        """,
+        (int(user_id),),
+    ).fetchall()
+    connection.close()
+    items = [dict(row) for row in rows]
+
+    now = datetime.now(timezone.utc)
+
+    def parse_dt(value):
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    def period_result(days: int) -> float:
+        cutoff = now.timestamp() - days * 86400
+        return sum(
+            float(item.get("result_percent") or 0)
+            for item in items
+            if item.get("result_percent") is not None
+            and (parse_dt(item.get("closed_at")) or parse_dt(item.get("created_at")))
+            and (parse_dt(item.get("closed_at")) or parse_dt(item.get("created_at"))).timestamp() >= cutoff
+        )
+
+    closed = [item for item in items if item.get("result_percent") is not None]
+    cumulative = 0.0
+    equity_curve = []
+    for item in closed:
+        cumulative += float(item.get("result_percent") or 0)
+        equity_curve.append({
+            "signal_id": item.get("signal_id"),
+            "label": str(item.get("closed_at") or item.get("created_at") or "")[:10],
+            "value": round(cumulative, 4),
+        })
+
+    coin_map = {}
+    for item in items:
+        symbol = str(item.get("symbol") or "UNKNOWN").upper()
+        data = coin_map.setdefault(symbol, {"symbol": symbol, "total": 0, "wins": 0, "losses": 0, "result": 0.0})
+        data["total"] += 1
+        if item.get("status") == "win":
+            data["wins"] += 1
+        elif item.get("status") == "loss":
+            data["losses"] += 1
+        if item.get("result_percent") is not None:
+            data["result"] += float(item.get("result_percent") or 0)
+
+    best_coins = []
+    for data in coin_map.values():
+        resolved = data["wins"] + data["losses"]
+        data["winrate"] = data["wins"] / resolved * 100 if resolved else 0.0
+        data["result"] = round(data["result"], 4)
+        best_coins.append(data)
+    best_coins.sort(key=lambda x: (x["result"], x["winrate"], x["total"]), reverse=True)
+
+    avg_score_values = [float(x["score"]) for x in items if x.get("score") is not None]
+    avg_conf_values = [float(x["confidence"]) for x in items if x.get("confidence") is not None]
+    return {
+        "periods": {
+            "day": round(period_result(1), 4),
+            "week": round(period_result(7), 4),
+            "month": round(period_result(30), 4),
+            "all": round(sum(float(x.get("result_percent") or 0) for x in closed), 4),
+        },
+        "equity_curve": equity_curve[-40:],
+        "best_coins": best_coins[:5],
+        "quality": {
+            "average_score": round(sum(avg_score_values) / len(avg_score_values), 1) if avg_score_values else 0.0,
+            "average_confidence": round(sum(avg_conf_values) / len(avg_conf_values), 1) if avg_conf_values else 0.0,
+            "premium_count": sum(1 for x in items if x.get("score") is not None and int(x["score"]) >= 85),
+            "strong_count": sum(1 for x in items if x.get("score") is not None and 75 <= int(x["score"]) < 85),
+        },
+    }

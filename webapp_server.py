@@ -13,7 +13,12 @@ from aiohttp import web
 from config import TOKEN as BOT_TOKEN
 from database import create_tables, get_total_discount, get_user
 from free_signals import FREE_SIGNALS_LIMIT, get_remaining_free_signals
-from signals import create_signal_tables, get_user_signal_history, get_user_signal_statistics
+from signals import (
+    create_signal_tables,
+    get_user_signal_analytics,
+    get_user_signal_history,
+    get_user_signal_statistics,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 WEBAPP_DIR = BASE_DIR / "webapp"
@@ -119,6 +124,11 @@ async def api_statistics(request: web.Request) -> web.Response:
     return web.json_response({"stats": get_user_signal_statistics(user_id)})
 
 
+async def api_analytics(request: web.Request) -> web.Response:
+    user_id = int(request_user(request)["id"])
+    return web.json_response({"analytics": get_user_signal_analytics(user_id)})
+
+
 async def api_signals(request: web.Request) -> web.Response:
     user_id = int(request_user(request)["id"])
     limit = max(1, min(int(request.query.get("limit", "30")), 50))
@@ -136,14 +146,15 @@ async def dashboard(request: web.Request) -> web.Response:
     return web.json_response({
         "user": user_payload(telegram_user),
         "stats": get_user_signal_statistics(user_id),
+        "analytics": get_user_signal_analytics(user_id),
         "history": [normalize_signal(x) for x in get_user_signal_history(user_id, limit=30)],
         "market": await market_snapshot(),
-        "server": {"status": "online", "version": "2.0"},
+        "server": {"status": "online", "version": "2.1"},
     })
 
 
 async def health(_: web.Request) -> web.Response:
-    return web.json_response({"status": "ok", "service": "LiquidityPlus Mini App API", "version": "2.0"})
+    return web.json_response({"status": "ok", "service": "LiquidityPlus Mini App API", "version": "2.1"})
 
 
 async def index(_: web.Request) -> web.FileResponse:
@@ -171,6 +182,7 @@ def create_app() -> web.Application:
     app.router.add_get("/api/profile", api_profile)
     app.router.add_get("/api/statistics", api_statistics)
     app.router.add_get("/api/signals", api_signals)
+    app.router.add_get("/api/analytics", api_analytics)
     app.router.add_get("/api/market", api_market)
     app.router.add_static("/static/", WEBAPP_DIR, show_index=False)
     return app
