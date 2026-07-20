@@ -1,0 +1,17 @@
+LIQUIDITY PLUS MINI APP V2
+
+1. На Render Start Command: python webapp_server.py
+2. Environment:
+   TOKEN=токен Telegram-бота
+   WEBAPP_DEMO_MODE=0
+   LIQUIDITYPLUS_DATA_DIR=/var/data (если подключен Persistent Disk)
+3. В config.py WEBAPP_URL должен совпадать с публичным HTTPS-адресом Render.
+4. Проверьте в браузере: https://ВАШ-ДОМЕН/health — должен быть JSON status ok.
+5. Mini App открывать кнопкой внутри Telegram, иначе initData отсутствует.
+
+API V2:
+/api/dashboard
+/api/profile
+/api/statistics
+/api/signals
+/api/market

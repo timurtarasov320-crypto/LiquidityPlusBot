@@ -1,0 +1,7 @@
+LiquidityPlus database restore report
+Users restored: 8
+Signals restored: 18
+Signal recipients restored: 83
+Active monitored signals after restore: 3
+Original current DB safety copies: pre_restore_safety_20260720_091124
+SQLite integrity_check: ok

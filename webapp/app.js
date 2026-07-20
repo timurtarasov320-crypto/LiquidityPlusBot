@@ -8,10 +8,9 @@ if (tg) {
 
 const initData = tg?.initData || "";
 const fallbackUser = tg?.initDataUnsafe?.user || {id: 0, first_name: "Trader"};
-
 const $ = id => document.getElementById(id);
 const fmt = n => Number(n || 0).toLocaleString(undefined,{maximumFractionDigits:2});
-
+const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
 function setText(id, value){ const el=$(id); if(el) el.textContent=value; }
 
 function renderSignals(items){
@@ -19,94 +18,90 @@ function renderSignals(items){
     const dir = String(s.direction || "").toUpperCase();
     const cls = dir === "LONG" ? "long" : "short";
     const result = s.result_percent == null ? "ACTIVE" : `${Number(s.result_percent)>=0?"+":""}${Number(s.result_percent).toFixed(2)}%`;
+    const score = s.score == null ? "—" : `${Number(s.score)}/100`;
+    const confidence = s.confidence == null ? "—" : `${Number(s.confidence)}%`;
+    const rr = s.rr_ratio == null ? "—" : `1:${Number(s.rr_ratio).toFixed(1)}`;
+    const checks = (s.confirmations || []).slice(0,6).map(x=>`<span class="check">✓ ${esc(x)}</span>`).join("");
     return `<div class="signal">
-      <h4>#${s.signal_id} · ${s.symbol}</h4>
-      <span class="direction ${cls}">${dir}</span>
-      <p>Entry ${s.entry} · SL ${s.stop_loss} · TP1 ${s.take_profit_1}</p>
-      <span></span><b class="result">${result}</b>
+      <div class="signal-head"><h4>#${esc(s.signal_id)} · ${esc(s.symbol)}</h4><span class="quality">${esc(s.quality_label || "STANDARD")}</span></div>
+      <span class="direction ${cls}">${esc(dir)}</span>
+      <p>Entry ${esc(s.entry)} · SL ${esc(s.stop_loss)} · TP1 ${esc(s.take_profit_1)}</p>
+      <div class="quality-grid"><span>Score <b>${score}</b></span><span>Confidence <b>${confidence}</b></span><span>RR <b>${rr}</b></span></div>
+      ${checks ? `<div class="checks">${checks}</div>` : ""}
+      <b class="result">${result}</b>
     </div>`;
   }).join("") : '<div class="empty">Сигналов пока нет</div>';
   $("recent-signals").innerHTML = html;
   $("all-signals").innerHTML = html;
 }
 
+async function api(path){
+  const res = await fetch(path, {headers: {"X-Telegram-Init-Data": initData}, cache:"no-store"});
+  const body = await res.json().catch(()=>({message:"Сервер вернул неверный ответ"}));
+  if(!res.ok) throw new Error(body.message || body.error || `HTTP ${res.status}`);
+  return body;
+}
+
+function showError(message){
+  setText("api-status", message);
+  const el=$("api-status"); if(el) el.classList.add("error");
+}
+
 async function load(){
   try{
-    const res = await fetch("/api/dashboard", {headers: {"X-Telegram-Init-Data": initData}});
-    if(!res.ok) throw new Error(await res.text());
-    const d = await res.json();
-
+    setText("api-status", "Подключение к API…");
+    const d = await api("/api/dashboard");
+    setText("api-status", "Данные обновлены");
     setText("user-name", d.user.first_name || fallbackUser.first_name || "Trader");
     setText("account-level", d.user.vip ? "PREMIUM" : "STANDARD");
     setText("vip-status", d.user.vip ? "VIP ACTIVE" : "VIP OFF");
-    setText("winrate", `${Number(d.stats.winrate).toFixed(1)}%`);
-    $("winrate-ring").style.background = `conic-gradient(var(--accent) ${Math.min(100,d.stats.winrate)*3.6}deg,#222 0deg)`;
-    setText("active-signals", d.stats.active);
-    setText("total-signals", d.stats.total);
-    setText("total-result", `${Number(d.stats.total_result)>=0?"+":""}${Number(d.stats.total_result).toFixed(2)}%`);
-    setText("referrals", d.user.referrals);
+    setText("winrate", `${Number(d.stats.winrate || 0).toFixed(1)}%`);
+    $("winrate-ring").style.background = `conic-gradient(var(--accent) ${Math.min(100,Number(d.stats.winrate||0))*3.6}deg,#222 0deg)`;
+    setText("active-signals", d.stats.active || 0);
+    setText("total-signals", d.stats.total || 0);
+    setText("total-result", `${Number(d.stats.total_result||0)>=0?"+":""}${Number(d.stats.total_result||0).toFixed(2)}%`);
+    setText("referrals", d.user.referrals || 0);
     setText("profile-id", d.user.id);
     setText("profile-vip", d.user.vip ? "ACTIVE" : "INACTIVE");
-    setText("profile-discount", `${d.user.discount}%`);
+    setText("profile-discount", `${d.user.discount || 0}%`);
     setText("profile-free", `${d.user.free_remaining}/${d.user.free_limit}`);
-
+    setText("profile-plan", d.user.plan || "FREE");
     for(const t of d.market || []){
       const key=t.symbol.toLowerCase();
-      setText(`${key}-price`, `$${fmt(t.price)}`);
-      setText(`${key}-change`, `${t.change>=0?"+":""}${Number(t.change).toFixed(2)}%`);
-      $(`${key}-change`).style.color = t.change>=0 ? "var(--green)" : "var(--red)";
+      setText(`${key}-price`, t.price ? `$${fmt(t.price)}` : "—");
+      setText(`${key}-change`, t.price ? `${t.change>=0?"+":""}${Number(t.change).toFixed(2)}%` : "—");
+      const changeEl=$(`${key}-change`); if(changeEl) changeEl.style.color = t.change>=0 ? "var(--green)" : "var(--red)";
     }
     renderSignals(d.history);
   }catch(e){
     console.error(e);
-    setText("welcome","WebApp запущен в демо-режиме");
+    showError(e.message || "Не удалось загрузить данные");
     setText("user-name",fallbackUser.first_name || "Trader");
     renderSignals([]);
   }
 }
 
 document.querySelectorAll(".tab").forEach(btn=>{
-  btn.onclick=()=>{
+  btn.addEventListener("click",()=>{
     document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
     document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));
     btn.classList.add("active");
     $(`page-${btn.dataset.page}`).classList.add("active");
-  };
+  });
 });
 
-$("scanner-button").onclick = async ()=>{
+$("scanner-button")?.addEventListener("click", async ()=>{
   const b=$("scanner-button"), r=$("scanner-result");
   b.disabled=true; b.textContent="Анализ рынка…";
-  const steps=["Funding & OI","Volume & CVD","Liquidity","FVG & Order Blocks","AI Score"];
+  const steps=["Trend 4H/1H","Liquidity Sweep","BOS / CHoCH","OB / FVG","Funding / OI","Volume / CVD","Risk/Reward","Final AI Score"];
   for(let i=0;i<steps.length;i++){
-    r.textContent=`${steps[i]} · ${20*(i+1)}%`;
-    await new Promise(x=>setTimeout(x,350));
+    r.textContent=`${steps[i]} · ${Math.round((i+1)/steps.length*100)}%`;
+    await new Promise(x=>setTimeout(x,260));
   }
-  r.innerHTML="<b style='color:var(--green)'>Сканирование завершено.</b><br>Сильные идеи отправляются администратору в Telegram.";
+  r.innerHTML="<b style='color:var(--green)'>Проверка завершена.</b><br>Публикуются только сигналы, прошедшие установленный порог качества.";
   b.disabled=false;b.textContent="Запустить анализ";
-};
+});
 
-$("close-app").onclick=()=>tg?.close();
+$("close-app")?.addEventListener("click",()=>tg?.close());
+$("refresh-data")?.addEventListener("click",load);
 load();
-
-function compactMoney(n){
-  n=Number(n||0); if(Math.abs(n)>=1e12)return `$${(n/1e12).toFixed(2)}T`;
-  if(Math.abs(n)>=1e9)return `$${(n/1e9).toFixed(2)}B`;
-  if(Math.abs(n)>=1e6)return `$${(n/1e6).toFixed(2)}M`; return `$${fmt(n)}`;
-}
-function impactClass(text){ return text.includes("Быч")?"var(--green)":text.includes("Медв")?"var(--red)":"var(--muted)"; }
-async function loadMarketPro(){
-  try{
-    const res=await fetch('/api/market-pro',{headers:{"X-Telegram-Init-Data":initData}});
-    if(!res.ok) throw new Error(await res.text()); const d=await res.json();
-    setText('market-score',d.overview.score); setText('market-score-label',d.overview.score_label.toUpperCase());
-    setText('fear-greed',`${d.overview.fear_greed}/100`); setText('btc-dominance',`${Number(d.overview.btc_dominance).toFixed(2)}%`);
-    setText('market-change',`${Number(d.overview.market_change)>=0?'+':''}${Number(d.overview.market_change).toFixed(2)}%`);
-    $('market-change').style.color=Number(d.overview.market_change)>=0?'var(--green)':'var(--red)';
-    $('derivatives-list').innerHTML=(d.derivatives||[]).map(x=>`<div class="derivative"><div class="derivative-head"><b>${x.symbol}</b><span style="color:${Math.abs(Number(x.funding))>=.05?'var(--red)':'var(--green)'}">${Math.abs(Number(x.funding))>=.05?'OVERHEATED':'NORMAL'}</span></div><div class="derivative-grid"><div><small>Funding</small><b>${Number(x.funding)>=0?'+':''}${Number(x.funding).toFixed(4)}%</b></div><div><small>Long/Short</small><b>${Number(x.long_short).toFixed(2)}</b></div><div><small>Open Interest</small><b>${compactMoney(x.oi).replace('$','')}</b></div></div></div>`).join('')||'<div class="empty">Нет данных</div>';
-    const movers=(id,items)=>$(id).innerHTML=(items||[]).map(x=>`<div class="mover"><b>${x.symbol}</b><span style="color:${Number(x.change)>=0?'var(--green)':'var(--red)'}">${Number(x.change)>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('');
-    movers('gainers-list',d.gainers); movers('losers-list',d.losers);
-    $('news-list').innerHTML=(d.news||[]).map(n=>`<a class="news-item" href="${n.url}" target="_blank" rel="noopener"><h4>${n.title}</h4><div class="news-meta"><span>${n.source}</span><b style="color:${impactClass(n.impact)}">${n.impact}</b></div><div class="news-explanation">${n.explanation}</div></a>`).join('')||'<div class="empty">Новостей пока нет</div>';
-  }catch(e){ console.error(e); $('derivatives-list').innerHTML='<div class="empty">Рыночные данные временно недоступны</div>'; }
-}
-loadMarketPro();

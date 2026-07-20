@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
@@ -13,6 +14,7 @@ from aiogram.types import (
 )
 
 from config import ADMIN_ID
+from project_paths import data_path
 from database import get_all_users
 from free_signals import (
     FREE_SIGNALS_LIMIT,
@@ -23,7 +25,7 @@ from free_signals import (
 
 router = Router()
 
-SIGNALS_DB_NAME = "signals.db"
+SIGNALS_DB_NAME = data_path("signals.db")
 
 
 def is_admin(user_id: int) -> bool:
@@ -73,6 +75,15 @@ def create_signal_tables() -> None:
             "ADD COLUMN score INTEGER DEFAULT NULL"
         )
 
+    quality_migrations = {
+        "confirmations_json": "ALTER TABLE signals ADD COLUMN confirmations_json TEXT DEFAULT NULL",
+        "confidence": "ALTER TABLE signals ADD COLUMN confidence INTEGER DEFAULT NULL",
+        "rr_ratio": "ALTER TABLE signals ADD COLUMN rr_ratio REAL DEFAULT NULL",
+    }
+    for column_name, sql in quality_migrations.items():
+        if column_name not in signal_columns:
+            cursor.execute(sql)
+
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS signal_recipients (
@@ -80,10 +91,23 @@ def create_signal_tables() -> None:
             user_id INTEGER NOT NULL,
             access_type TEXT NOT NULL,
             sent_at TEXT NOT NULL,
+            chat_id INTEGER DEFAULT NULL,
+            message_id INTEGER DEFAULT NULL,
             PRIMARY KEY (signal_id, user_id)
         )
         """
     )
+
+    cursor.execute("PRAGMA table_info(signal_recipients)")
+    recipient_columns = {row["name"] for row in cursor.fetchall()}
+    if "chat_id" not in recipient_columns:
+        cursor.execute(
+            "ALTER TABLE signal_recipients ADD COLUMN chat_id INTEGER DEFAULT NULL"
+        )
+    if "message_id" not in recipient_columns:
+        cursor.execute(
+            "ALTER TABLE signal_recipients ADD COLUMN message_id INTEGER DEFAULT NULL"
+        )
 
     connection.commit()
     connection.close()
@@ -100,6 +124,9 @@ def create_signal(
     risk: Optional[str],
     comment: Optional[str],
     score: Optional[int] = None,
+    confirmations: Optional[list[str]] = None,
+    confidence: Optional[int] = None,
+    rr_ratio: Optional[float] = None,
 ) -> int:
     connection = connect_signals_db()
     cursor = connection.cursor()
@@ -117,10 +144,13 @@ def create_signal(
             risk,
             comment,
             score,
+            confirmations_json,
+            confidence,
+            rr_ratio,
             status,
             created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
         """,
         (
             symbol.upper(),
@@ -137,6 +167,9 @@ def create_signal(
                 if score is not None
                 else None
             ),
+            json.dumps(confirmations or [], ensure_ascii=False),
+            (max(0, min(int(confidence), 100)) if confidence is not None else None),
+            (max(0.0, float(rr_ratio)) if rr_ratio is not None else None),
             datetime.now(timezone.utc).isoformat(),
         ),
     )
@@ -195,31 +228,59 @@ def save_signal_recipient(
     signal_id: int,
     user_id: int,
     access_type: str,
+    chat_id: Optional[int] = None,
+    message_id: Optional[int] = None,
 ) -> None:
     connection = connect_signals_db()
     cursor = connection.cursor()
 
     cursor.execute(
         """
-        INSERT OR IGNORE INTO signal_recipients (
+        INSERT INTO signal_recipients (
             signal_id,
             user_id,
             access_type,
-            sent_at
+            sent_at,
+            chat_id,
+            message_id
         )
-        VALUES (?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(signal_id, user_id) DO UPDATE SET
+            access_type = excluded.access_type,
+            sent_at = excluded.sent_at,
+            chat_id = COALESCE(excluded.chat_id, signal_recipients.chat_id),
+            message_id = COALESCE(excluded.message_id, signal_recipients.message_id)
         """,
         (
             signal_id,
             user_id,
             access_type,
             datetime.now(timezone.utc).isoformat(),
+            chat_id,
+            message_id,
         ),
     )
 
     connection.commit()
     connection.close()
 
+
+def get_signal_recipient_messages(signal_id: int) -> list[dict]:
+    connection = connect_signals_db()
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        SELECT user_id, access_type, chat_id, message_id
+        FROM signal_recipients
+        WHERE signal_id = ?
+          AND chat_id IS NOT NULL
+          AND message_id IS NOT NULL
+        """,
+        (signal_id,),
+    )
+    rows = cursor.fetchall()
+    connection.close()
+    return [dict(row) for row in rows]
 
 def get_signal_recipients(signal_id: int):
     connection = connect_signals_db()
@@ -262,13 +323,19 @@ def close_signal(
         SET
             status = ?,
             result_percent = ?,
-            closed_at = ?
+            closed_at = ?,
+            monitor_enabled = 0,
+            close_reason = COALESCE(close_reason, ?),
+            monitor_updated_at = ?
         WHERE signal_id = ?
           AND status = 'active'
+          AND closed_at IS NULL
         """,
         (
             status,
             result_percent,
+            datetime.now(timezone.utc).isoformat(),
+            status,
             datetime.now(timezone.utc).isoformat(),
             signal_id,
         ),
@@ -688,7 +755,7 @@ async def send_signal_to_users(
 
         if vip_status:
             try:
-                await bot.send_message(
+                sent_message = await bot.send_message(
                     chat_id=user_id,
                     text=(
                         "💎 VIP-ДОСТУП\n\n"
@@ -701,6 +768,8 @@ async def send_signal_to_users(
                     signal_id=signal_id,
                     user_id=user_id,
                     access_type="vip",
+                    chat_id=sent_message.chat.id,
+                    message_id=sent_message.message_id,
                 )
 
                 vip_sent += 1
@@ -720,7 +789,7 @@ async def send_signal_to_users(
                 user_id
             )
 
-            await bot.send_message(
+            sent_message = await bot.send_message(
                 chat_id=user_id,
                 text=(
                     "🎁 БЕСПЛАТНЫЙ СИГНАЛ\n\n"
@@ -742,6 +811,8 @@ async def send_signal_to_users(
                     signal_id=signal_id,
                     user_id=user_id,
                     access_type="free",
+                    chat_id=sent_message.chat.id,
+                    message_id=sent_message.message_id,
                 )
 
                 free_sent += 1
@@ -1381,49 +1452,70 @@ def get_signal_recipient_ids(signal_id: int) -> list[int]:
     ]
 
 
+def _numeric_midpoint(value: object) -> float | None:
+    import re
+    if value is None:
+        return None
+    text = re.sub(r"[–—−]", "-", str(value).replace("\u00a0", " "))
+    numbers = [float(x.replace(" ", "").replace(",", ".")) for x in re.findall(r"\d[\d\s]*(?:[.,]\d+)?", text)]
+    if not numbers:
+        return None
+    return numbers[0] if len(numbers) == 1 else sum(numbers[:2]) / 2
+
+
+def _calculate_rr(signal: dict) -> float | None:
+    entry = _numeric_midpoint(signal.get("entry"))
+    stop = _numeric_midpoint(signal.get("stop_loss"))
+    if entry is None or stop is None or abs(entry - stop) <= 0:
+        return None
+    target = None
+    if int(signal.get("tp3_hit") or 0):
+        target = _numeric_midpoint(signal.get("take_profit_3"))
+    elif int(signal.get("tp2_hit") or 0):
+        target = _numeric_midpoint(signal.get("take_profit_2"))
+    elif int(signal.get("tp1_hit") or 0):
+        target = _numeric_midpoint(signal.get("take_profit_1"))
+    elif signal.get("status") == "loss":
+        return -1.0
+    elif signal.get("status") == "breakeven":
+        return 0.0
+    if target is None:
+        return None
+    return abs(target - entry) / abs(entry - stop)
+
+
 def get_user_signal_statistics(user_id: int) -> dict:
     connection = connect_signals_db()
-    cursor = connection.cursor()
-
-    cursor.execute(
+    rows = connection.execute(
         """
-        SELECT
-            COUNT(*) AS total,
-            SUM(CASE WHEN s.status = 'win' THEN 1 ELSE 0 END) AS wins,
-            SUM(CASE WHEN s.status = 'loss' THEN 1 ELSE 0 END) AS losses,
-            SUM(CASE WHEN s.status = 'breakeven' THEN 1 ELSE 0 END) AS breakeven,
-            SUM(CASE WHEN s.status = 'active' THEN 1 ELSE 0 END) AS active,
-            COALESCE(SUM(s.result_percent), 0) AS total_result
-        FROM signal_recipients r
+        SELECT s.* FROM signal_recipients r
         JOIN signals s ON s.signal_id = r.signal_id
         WHERE r.user_id = ?
-        """,
-        (user_id,),
-    )
-
-    row = cursor.fetchone()
+        """, (user_id,)
+    ).fetchall()
     connection.close()
-
-    total = int(row["total"] or 0)
-    wins = int(row["wins"] or 0)
-    losses = int(row["losses"] or 0)
-    breakeven = int(row["breakeven"] or 0)
-    active = int(row["active"] or 0)
-    total_result = float(row["total_result"] or 0)
-
+    items = [dict(row) for row in rows]
+    total = len(items)
+    wins = sum(1 for x in items if x.get("status") == "win")
+    losses = sum(1 for x in items if x.get("status") == "loss")
+    breakeven = sum(1 for x in items if x.get("status") == "breakeven")
+    active = sum(1 for x in items if x.get("status") == "active")
+    tp1 = sum(1 for x in items if int(x.get("tp1_hit") or 0))
+    tp2 = sum(1 for x in items if int(x.get("tp2_hit") or 0))
+    tp3 = sum(1 for x in items if int(x.get("tp3_hit") or 0))
     resolved = wins + losses
     winrate = wins / resolved * 100 if resolved else 0.0
-
+    results = [float(x["result_percent"]) for x in items if x.get("result_percent") is not None]
+    rr_values = [rr for rr in (_calculate_rr(x) for x in items) if rr is not None]
     return {
-        "total": total,
-        "wins": wins,
-        "losses": losses,
-        "breakeven": breakeven,
-        "active": active,
+        "total": total, "wins": wins, "losses": losses,
+        "breakeven": breakeven, "active": active,
+        "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "winrate": winrate,
-        "total_result": total_result,
+        "total_result": sum(results),
+        "average_result": sum(results) / len(results) if results else 0.0,
+        "average_rr": sum(rr_values) / len(rr_values) if rr_values else 0.0,
     }
-
 
 def get_user_signal_history(
     user_id: int,

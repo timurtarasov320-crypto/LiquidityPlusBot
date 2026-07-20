@@ -18,7 +18,7 @@
         <div class="eyebrow">LIQUIDITY PLUS</div>
         <h1>Trading Terminal</h1>
       </div>
-      <div class="status"><span></span> LIVE</div>
+      <div><div class="status"><span></span> LIVE</div><small id="api-status" class="api-status">Подключение…</small></div>
     </header>
 
     <section class="hero card">
@@ -57,8 +57,6 @@
     <nav class="tabs">
       <button class="tab active" data-page="dashboard">Обзор</button>
       <button class="tab" data-page="signals">Сигналы</button>
-      <button class="tab" data-page="market">Рынок</button>
-      <button class="tab" data-page="news">Новости</button>
       <button class="tab" data-page="scanner">AI Scanner</button>
       <button class="tab" data-page="profile">Профиль</button>
     </nav>
@@ -86,34 +84,6 @@
       </article>
     </section>
 
-
-    <section class="page" id="page-market">
-      <article class="card score-card">
-        <div class="section-title"><h3>Market Score</h3><span id="market-score-label">ЗАГРУЗКА</span></div>
-        <div class="big-score"><strong id="market-score">—</strong><small>/100</small></div>
-        <div class="market-facts">
-          <div><small>Fear & Greed</small><b id="fear-greed">—</b></div>
-          <div><small>BTC Dominance</small><b id="btc-dominance">—</b></div>
-          <div><small>24h Market</small><b id="market-change">—</b></div>
-        </div>
-      </article>
-      <article class="card">
-        <div class="section-title"><h3>Derivatives Confirmation</h3><span>OKX LIVE</span></div>
-        <div id="derivatives-list" class="derivatives-list"><div class="empty">Загрузка…</div></div>
-      </article>
-      <article class="card movers-grid">
-        <div><h3>Лидеры роста</h3><div id="gainers-list"></div></div>
-        <div><h3>Лидеры падения</h3><div id="losers-list"></div></div>
-      </article>
-    </section>
-
-    <section class="page" id="page-news">
-      <article class="card">
-        <div class="section-title"><h3>AI News Impact</h3><span>LIVE RSS</span></div>
-        <div id="news-list" class="news-list"><div class="empty">Загрузка новостей…</div></div>
-      </article>
-    </section>
-
     <section class="page" id="page-scanner">
       <article class="card scanner-card">
         <div class="scanner-orb">AI</div>
@@ -132,6 +102,8 @@
         <div class="profile-line"><span>VIP</span><b id="profile-vip">—</b></div>
         <div class="profile-line"><span>Скидка</span><b id="profile-discount">0%</b></div>
         <div class="profile-line"><span>Бесплатные сигналы</span><b id="profile-free">—</b></div>
+        <div class="profile-line"><span>Тариф</span><b id="profile-plan">FREE</b></div>
+        <button class="secondary" id="refresh-data">Обновить данные</button>
         <button class="primary" id="close-app">Вернуться в Telegram</button>
       </article>
     </section>

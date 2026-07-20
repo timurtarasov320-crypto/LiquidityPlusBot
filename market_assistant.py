@@ -17,6 +17,7 @@ from aiogram.types import (
 )
 
 from config import ADMIN_ID
+from project_paths import data_path
 from order_flow import (
     OrderFlowResult,
     analyse_order_flow,
@@ -34,7 +35,7 @@ router = Router()
 OKX_API_URL = "https://www.okx.com"
 
 ASSISTANT_DB_NAME = "market_assistant.db"
-SIGNALS_DB_NAME = "signals.db"
+SIGNALS_DB_NAME = data_path("signals.db")
 
 MAX_MARKETS = 200
 DEEP_ANALYSIS_LIMIT = 80

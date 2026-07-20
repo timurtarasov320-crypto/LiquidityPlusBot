@@ -1,9 +1,11 @@
 import sqlite3
+
+from project_paths import data_path
 from datetime import datetime, timezone
 from typing import Optional
 
 FREE_SIGNALS_LIMIT = 10
-DATABASE_NAME = "free_signals.db"
+DATABASE_NAME = data_path("free_signals.db")
 
 
 def connect() -> sqlite3.Connection:

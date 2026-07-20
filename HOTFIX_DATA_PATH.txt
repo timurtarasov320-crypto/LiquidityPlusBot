@@ -1,0 +1,3 @@
+Исправлено: в market_assistant.py добавлен импорт from project_paths import data_path.
+Все Python-файлы проверены командой compileall.
+Запуск: py bot.py

@@ -1,10 +1,15 @@
 import asyncio
 import os
+import logging
 
 from aiogram import BaseMiddleware, Bot, Dispatcher
 
 from admin import router as admin_router
-from admin_audit import create_audit_table
+from admin_web import start_admin_web_server
+from backup_manager import automatic_backup_loop
+from logging_config import setup_logging
+from role_manager import create_role_tables
+from staff_commands import router as staff_router
 from auto_scanner import automatic_market_scanner
 from auto_scanner_commands import (
     router as auto_scanner_router,
@@ -19,7 +24,6 @@ from handlers import router as handlers_router
 from market_assistant import (
     router as market_assistant_router,
 )
-from market_hub import router as market_hub_router
 from order_flow_commands import (
     router as order_flow_commands_router,
 )
@@ -33,7 +37,10 @@ from signal_analytics_commands import (
     router as signal_analytics_router,
 )
 from signal_monitor import monitor_signals
+from subscription_lifecycle import subscription_lifecycle_monitor
 from signals import router as signals_router
+from v5_features import router as v5_router, create_v5_tables, automatic_reports
+from v6_features import router as v6_router, create_v6_tables
 
 
 
@@ -50,17 +57,22 @@ class BlockedUsersMiddleware(BaseMiddleware):
             return None
         return await handler(event, data)
 
+setup_logging()
+logger = logging.getLogger(__name__)
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 dp.update.outer_middleware(BlockedUsersMiddleware())
 
+dp.include_router(v6_router)
+dp.include_router(v5_router)
+dp.include_router(staff_router)
 dp.include_router(admin_router)
 dp.include_router(payments_router)
 dp.include_router(signals_router)
 dp.include_router(signal_analytics_router)
 dp.include_router(market_assistant_router)
-dp.include_router(market_hub_router)
 dp.include_router(auto_scanner_router)
 dp.include_router(autoscan_exclusion_router)
 dp.include_router(order_flow_commands_router)
@@ -84,7 +96,9 @@ DEFAULT_ORDER_FLOW_MARKETS = [
 
 async def main():
     create_tables()
-    create_audit_table()
+    create_role_tables()
+    create_v5_tables()
+    create_v6_tables()
 
     print("ПАПКА ПРОЕКТА:", os.getcwd())
     print("ФАЙЛ BOT:", os.path.abspath(__file__))
@@ -118,6 +132,23 @@ async def main():
         automatic_payment_monitor(bot)
     )
 
+
+    subscription_task = asyncio.create_task(
+        subscription_lifecycle_monitor(bot)
+    )
+
+    backup_task = asyncio.create_task(
+        automatic_backup_loop()
+    )
+
+    reports_task = asyncio.create_task(
+        automatic_reports(bot, ADMIN_ID)
+    )
+
+    admin_web_runner = await start_admin_web_server()
+    if admin_web_runner:
+        print("Веб-панель администратора запущена")
+
     print("Автоматический сканер запущен")
     print("Ежедневная аналитика запущена")
     print("Автоматическая проверка оплат запущена")
@@ -135,17 +166,26 @@ async def main():
         scanner_task.cancel()
         analytics_task.cancel()
         payment_task.cancel()
+        subscription_task.cancel()
+        backup_task.cancel()
+        reports_task.cancel()
 
         for task in (
             monitor_task,
             scanner_task,
             analytics_task,
             payment_task,
+            subscription_task,
+            backup_task,
+            reports_task,
         ):
             try:
                 await task
             except asyncio.CancelledError:
                 pass
+
+        if admin_web_runner:
+            await admin_web_runner.cleanup()
 
         await order_flow_ws.stop()
         await bot.session.close()

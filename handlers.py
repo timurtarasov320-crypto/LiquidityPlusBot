@@ -3,8 +3,7 @@ from datetime import timezone
 from pathlib import Path
 
 from aiogram import F, Router
-from aiogram.filters import CommandObject, CommandStart
-from admin_audit import log_event
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -22,13 +21,12 @@ from database import (
     add_referral,
     add_user,
     get_next_referral_level,
-    get_referral_rank,
-    get_top_referrers,
     get_total_discount,
+    get_top_referrers,
+    get_referral_discount,
     get_user,
     get_vip_until,
 )
-from referral import get_level, progress_bar
 from free_signals import (
     FREE_SIGNALS_LIMIT,
     get_remaining_free_signals,
@@ -421,12 +419,6 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
                     text="👥 Партнёры",
                     callback_data="menu_referrals",
                 ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⚡ Trading Hub",
-                    callback_data="menu_market_hub",
-                )
             ],
             [
                 InlineKeyboardButton(
@@ -912,7 +904,7 @@ async def show_signals(callback: CallbackQuery):
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "Ваш VIP-доступ активен.\n\n"
             "Вы получаете все сигналы без ограничений, "
-            "включая сопровождение TP и Stop Loss.\n\n"
+            "включая автоматическую фиксацию TP и Stop Loss.\n\n"
             "Новые сигналы приходят автоматически."
         )
     else:
@@ -1096,7 +1088,7 @@ async def show_vip(callback: CallbackQuery):
         "◈ Все торговые сигналы\n"
         "◈ AI Scanner и Smart Money-фильтры\n"
         "◈ Live Order Flow и CVD\n"
-        "◈ Автоматическое сопровождение TP/SL\n"
+        "◈ Автоматическое отслеживание TP/SL\n"
         "◈ Приоритетная аналитика\n"
         "◈ Без месячного лимита\n\n"
         f"Ваша скидка: {discount}%\n\n"
@@ -1221,18 +1213,12 @@ async def show_referrals(callback: CallbackQuery):
         if vip_status
         else "Не активен"
     )
-    level = get_level(referral_count)
-    rank = get_referral_rank(callback.from_user.id)
-    level_progress = progress_bar(referral_count)
 
     await render_callback(
         callback,
         "━━━━━━━━━━━━━━━━━━━━\n"
         "👥 РЕФЕРАЛЬНАЯ СИСТЕМА\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Уровень: {level.title}\n"
-        f"Место в рейтинге: #{rank}\n"
-        f"Прогресс: {level_progress}\n\n"
         f"Приглашено: {referral_count}\n"
         f"Итоговая скидка: {discount}%\n"
         f"VIP-бонус: {vip_bonus}\n\n"
@@ -1257,8 +1243,8 @@ async def show_referrals(callback: CallbackQuery):
                 ],
                 [
                     InlineKeyboardButton(
-                        text="🏆 Рейтинг партнёров",
-                        callback_data="referral_leaderboard",
+                        text="🏅 Топ-10 партнёров",
+                        callback_data="menu_leaderboard",
                     )
                 ],
                 [
@@ -1296,10 +1282,13 @@ async def show_statistics(callback: CallbackQuery):
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📨 {tr(callback.from_user.id, 'received')}: {stats['total']}\n"
         f"📡 {tr(callback.from_user.id, 'active_signals')}: {stats['active']}\n"
+        f"🎯 TP1: {stats.get('tp1', 0)} | TP2: {stats.get('tp2', 0)} | TP3: {stats.get('tp3', 0)}\n"
         f"✅ {tr(callback.from_user.id, 'wins')}: {stats['wins']}\n"
         f"❌ {tr(callback.from_user.id, 'losses')}: {stats['losses']}\n"
         f"🛡 {tr(callback.from_user.id, 'be')}: {stats['breakeven']}\n"
         f"🏆 {tr(callback.from_user.id, 'winrate')}: {stats['winrate']:.1f}%\n"
+        f"⚖️ Средний R:R: {stats.get('average_rr', 0.0):.2f}\n"
+        f"📊 Средняя доходность: {stats.get('average_result', 0.0):+.2f}%\n"
         f"📈 {tr(callback.from_user.id, 'result')}: {stats['total_result']:+.2f}%\n"
         "━━━━━━━━━━━━━━━━━━━━",
         reply_markup=statistics_keyboard(),
@@ -1363,29 +1352,64 @@ async def show_history(callback: CallbackQuery):
 
 
 
-@router.callback_query(F.data == "referral_leaderboard")
-async def referral_leaderboard(callback: CallbackQuery):
-    top = get_top_referrers(10)
+
+@router.message(Command("stats"))
+async def public_signal_stats(message: Message):
+    stats = get_user_signal_statistics(message.from_user.id)
+    await message.answer(
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "📊 СТАТИСТИКА СИГНАЛОВ\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Всего получено: {stats['total']}\n"
+        f"Активных: {stats['active']}\n"
+        f"TP1: {stats.get('tp1', 0)}\n"
+        f"TP2: {stats.get('tp2', 0)}\n"
+        f"TP3: {stats.get('tp3', 0)}\n"
+        f"Stop Loss: {stats['losses']}\n"
+        f"Break Even: {stats['breakeven']}\n"
+        f"Win Rate: {stats['winrate']:.1f}%\n"
+        f"Средний R:R: {stats.get('average_rr', 0.0):.2f}\n"
+        f"Средняя доходность: {stats.get('average_result', 0.0):+.2f}%\n"
+        f"Суммарный результат: {stats['total_result']:+.2f}%"
+    )
+
+
+@router.callback_query(F.data == "menu_leaderboard")
+async def show_leaderboard(callback: CallbackQuery):
+    if not await require_subscription_callback(callback):
+        return
+    leaders = get_top_referrers(10)
+    medals = ["🥇", "🥈", "🥉"]
     lines = [
         "━━━━━━━━━━━━━━━━━━━━",
-        "🏆 РЕЙТИНГ ПАРТНЁРОВ",
+        "🏅 ТОП-10 ПАРТНЁРОВ",
         "━━━━━━━━━━━━━━━━━━━━",
         "",
     ]
-    medals = ["🥇", "🥈", "🥉"]
-    for index, user in enumerate(top, start=1):
-        name = f"@{user[1]}" if user[1] else (user[2] or str(user[0]))
-        prefix = medals[index - 1] if index <= 3 else f"{index}."
-        lines.append(f"{prefix} {name} — {int(user[3] or 0)}")
-    if not top:
-        lines.append("Пока никто не пригласил пользователей.")
+    if not leaders:
+        lines.append("Рейтинг пока пуст.")
+    else:
+        for index, row in enumerate(leaders, start=1):
+            user_id, username, first_name, referrals, *extra = row
+            user = get_user(int(user_id))
+            vip = bool(user[4]) if user else False
+            count = int(referrals or 0)
+            discount = get_referral_discount(count) + (5 if vip else 0)
+            discount = min(discount, 55)
+            name = (f"@{username}" if username else (first_name or f"ID {user_id}"))
+            icon = medals[index - 1] if index <= 3 else f"{index}."
+            lines.append(
+                f"{icon} {name}\n"
+                f"   Приглашено: {count} | Скидка: {discount}% | VIP: {'✅' if vip else '—'}"
+            )
     await render_callback(
         callback,
         "\n".join(lines),
         banner_key="referrals",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_referrals")
-        ]]),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Партнёры", callback_data="menu_referrals")],
+            [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu_home")],
+        ]),
     )
     await callback.answer()
 
@@ -1488,7 +1512,7 @@ async def show_about(callback: CallbackQuery):
         "• Funding и Open Interest\n"
         "• RSI, EMA и объёмы\n"
         "• Order Flow и CVD\n"
-        "• Автоматическое сопровождение TP/SL\n\n"
+        "• Автоматическое отслеживание TP/SL\n\n"
         "Сигналы не гарантируют прибыль. "
         "Всегда соблюдайте риск-менеджмент.",
         reply_markup=back_to_menu_keyboard(),

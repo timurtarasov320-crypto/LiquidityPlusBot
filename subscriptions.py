@@ -27,6 +27,20 @@ SUBSCRIPTION_PLANS = {
         price_usd=15.0,
         description="Доступ ко всем VIP-сигналам на 30 дней.",
     ),
+    "three_months": SubscriptionPlan(
+        code="three_months",
+        title="3 месяца",
+        days=90,
+        price_usd=40.0,
+        description="Доступ ко всем VIP-сигналам на 90 дней.",
+    ),
+    "six_months": SubscriptionPlan(
+        code="six_months",
+        title="6 месяцев",
+        days=180,
+        price_usd=75.0,
+        description="Доступ ко всем VIP-сигналам на 180 дней.",
+    ),
     "year": SubscriptionPlan(
         code="year",
         title="12 месяцев",
