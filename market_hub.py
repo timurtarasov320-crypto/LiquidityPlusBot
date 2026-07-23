@@ -32,11 +32,8 @@ NEWS_RSS_URLS = [
     if url.strip()
 ]
 HTTP_TIMEOUT_SECONDS = int(os.getenv("MARKET_HTTP_TIMEOUT", "12"))
-CACHE_TTL_SECONDS = int(os.getenv("MARKET_CACHE_TTL", "300"))
-STALE_CACHE_SECONDS = int(os.getenv("MARKET_STALE_CACHE", "21600"))
+CACHE_TTL_SECONDS = int(os.getenv("MARKET_CACHE_TTL", "90"))
 
-# key -> (created_monotonic, value). Fresh values are reused for 5 minutes;
-# stale values remain available for several hours when an upstream API is limited.
 _CACHE: dict[str, tuple[float, Any]] = {}
 
 
@@ -48,14 +45,12 @@ class NewsItem:
     published: str
 
 
-def _cache_get(key: str, *, allow_stale: bool = False) -> Any | None:
+def _cache_get(key: str) -> Any | None:
     item = _CACHE.get(key)
     if not item:
         return None
     created_at, value = item
-    age = time.monotonic() - created_at
-    max_age = STALE_CACHE_SECONDS if allow_stale else CACHE_TTL_SECONDS
-    if age > max_age:
+    if time.monotonic() - created_at > CACHE_TTL_SECONDS:
         _CACHE.pop(key, None)
         return None
     return value
@@ -79,17 +74,9 @@ def _headers() -> dict[str, str]:
 async def _get_json(url: str, params: dict[str, Any] | None = None) -> Any:
     timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
     async with aiohttp.ClientSession(timeout=timeout, headers=_headers()) as session:
-        for attempt in range(3):
-            async with session.get(url, params=params) as response:
-                if response.status == 429:
-                    retry_after = response.headers.get("Retry-After")
-                    delay = float(retry_after) if retry_after and retry_after.isdigit() else 1.5 * (attempt + 1)
-                    if attempt < 2:
-                        await asyncio.sleep(min(delay, 5.0))
-                        continue
-                response.raise_for_status()
-                return await response.json(content_type=None)
-    raise RuntimeError(f"Market API unavailable: {url}")
+        async with session.get(url, params=params) as response:
+            response.raise_for_status()
+            return await response.json(content_type=None)
 
 
 async def _get_text(url: str) -> str:
@@ -189,59 +176,35 @@ async def get_global_market() -> dict[str, Any]:
     cached = _cache_get("global")
     if cached is not None:
         return cached
-    try:
-        payload = await _get_json(f"{COINGECKO_BASE_URL}/global")
-        return _cache_set("global", payload.get("data", {}))
-    except Exception as error:
-        stale = _cache_get("global", allow_stale=True)
-        if stale is not None:
-            print(f"CoinGecko global limited; using stale cache: {error}")
-            return stale
-        print(f"CoinGecko global unavailable: {error}")
-        return {}
+    payload = await _get_json(f"{COINGECKO_BASE_URL}/global")
+    return _cache_set("global", payload.get("data", {}))
 
 
 async def get_markets() -> list[dict[str, Any]]:
     cached = _cache_get("markets")
     if cached is not None:
         return cached
-    try:
-        payload = await _get_json(
-            f"{COINGECKO_BASE_URL}/coins/markets",
-            params={
-                "vs_currency": "usd",
-                "order": "market_cap_desc",
-                "per_page": 100,
-                "page": 1,
-                "sparkline": "false",
-                "price_change_percentage": "24h",
-            },
-        )
-        return _cache_set("markets", payload)
-    except Exception as error:
-        stale = _cache_get("markets", allow_stale=True)
-        if stale is not None:
-            print(f"CoinGecko markets limited; using stale cache: {error}")
-            return stale
-        print(f"CoinGecko markets unavailable: {error}")
-        return []
+    payload = await _get_json(
+        f"{COINGECKO_BASE_URL}/coins/markets",
+        params={
+            "vs_currency": "usd",
+            "order": "market_cap_desc",
+            "per_page": 100,
+            "page": 1,
+            "sparkline": "false",
+            "price_change_percentage": "24h",
+        },
+    )
+    return _cache_set("markets", payload)
 
 
 async def get_fear_greed() -> dict[str, Any]:
     cached = _cache_get("fear_greed")
     if cached is not None:
         return cached
-    try:
-        payload = await _get_json(FEAR_GREED_URL)
-        data = (payload.get("data") or [{}])[0]
-        return _cache_set("fear_greed", data)
-    except Exception as error:
-        stale = _cache_get("fear_greed", allow_stale=True)
-        if stale is not None:
-            print(f"Fear & Greed unavailable; using stale cache: {error}")
-            return stale
-        print(f"Fear & Greed unavailable: {error}")
-        return {}
+    payload = await _get_json(FEAR_GREED_URL)
+    data = (payload.get("data") or [{}])[0]
+    return _cache_set("fear_greed", data)
 
 
 def _rss_items(xml_text: str, source: str) -> list[NewsItem]:

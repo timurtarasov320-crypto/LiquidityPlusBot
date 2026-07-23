@@ -1,0 +1,20 @@
+LIQUIDITYPLUS — MINI APP + CONFIRMATIONS UPDATE
+
+Добавлено:
+1. Новые сигналы AI Scanner сохраняют score, список подтверждений и предупреждений.
+2. В Telegram-карточке сигнала показывается количество подтверждений, причины и риски.
+3. Mini App получает реальные данные пользователя из users.db и signals.db.
+4. Реальные статусы сигналов: active / win / loss / breakeven, TP1/TP2/TP3 и результат.
+5. Фильтры истории сигналов и раскрывающийся список подтверждений.
+6. AI Scanner в Mini App читает реальные сетапы из market_assistant.db вместо имитации.
+7. Администратор видит последние сетапы; обычный пользователь — только опубликованные сильные сетапы.
+8. Добавлен /health для проверки Render.
+9. Render-порт читается из PORT автоматически.
+
+После замены файлов:
+- локально: py bot.py
+- Render Start Command: python webapp_server.py
+- выполнить Manual Deploy -> Deploy latest commit
+- проверить: https://liquidityplusbot.onrender.com/health
+
+Старые базы не удалять. Колонки confirmations_json и warnings_json добавятся автоматически.

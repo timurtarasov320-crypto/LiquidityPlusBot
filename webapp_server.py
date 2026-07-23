@@ -1,8 +1,8 @@
 import hashlib
 import hmac
 import json
-import logging
 import os
+import sqlite3
 import time
 from pathlib import Path
 from urllib.parse import parse_qsl
@@ -10,26 +10,22 @@ from urllib.parse import parse_qsl
 import aiohttp
 from aiohttp import web
 
-from config import TOKEN as BOT_TOKEN
-from database import create_tables, get_total_discount, get_user
+from config import ADMIN_ID, TOKEN as BOT_TOKEN
+from database import get_total_discount, get_user
 from free_signals import FREE_SIGNALS_LIMIT, get_remaining_free_signals
-from signals import (
-    create_signal_tables,
-    get_user_signal_analytics,
-    get_user_signal_history,
-    get_user_signal_statistics,
-)
+from project_paths import data_path
+from signals import get_user_signal_history, get_user_signal_statistics
 
 BASE_DIR = Path(__file__).resolve().parent
 WEBAPP_DIR = BASE_DIR / "webapp"
-LOGGER = logging.getLogger("liquidityplus.webapp")
+ASSISTANT_DB = data_path("market_assistant.db")
 
 
 def validate_init_data(init_data: str) -> dict:
     if not init_data:
         if os.getenv("WEBAPP_DEMO_MODE", "0") == "1":
             return {"id": 0, "first_name": "Demo Trader", "username": "demo"}
-        raise web.HTTPUnauthorized(text="Откройте Mini App только через Telegram")
+        raise web.HTTPUnauthorized(text="Откройте Mini App через Telegram")
 
     values = dict(parse_qsl(init_data, keep_blank_values=True))
     received_hash = values.pop("hash", "")
@@ -46,149 +42,174 @@ def validate_init_data(init_data: str) -> dict:
         raise web.HTTPUnauthorized(text="Invalid initData")
 
     try:
-        user = json.loads(values.get("user", "{}"))
+        return json.loads(values.get("user", "{}"))
     except json.JSONDecodeError as exc:
         raise web.HTTPUnauthorized(text="Invalid user data") from exc
-    if not user.get("id"):
-        raise web.HTTPUnauthorized(text="Telegram user missing")
-    return user
+
+
+def parse_json_list(value) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    try:
+        parsed = json.loads(value)
+        return [str(item) for item in parsed] if isinstance(parsed, list) else []
+    except (TypeError, json.JSONDecodeError):
+        return []
+
+
+def serialize_signal(signal: dict) -> dict:
+    item = dict(signal)
+    item["confirmations"] = parse_json_list(item.pop("confirmations_json", None))
+    item["warnings"] = parse_json_list(item.pop("warnings_json", None))
+    return item
+
+
+def latest_scanner_setups(limit: int = 8) -> list[dict]:
+    try:
+        connection = sqlite3.connect(ASSISTANT_DB)
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT setup_id, inst_id, direction, score, setup_json, status, created_at
+            FROM assistant_setups
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (max(1, min(limit, 20)),),
+        ).fetchall()
+        connection.close()
+    except sqlite3.Error:
+        return []
+
+    result = []
+    for row in rows:
+        try:
+            setup = json.loads(row["setup_json"])
+        except (TypeError, json.JSONDecodeError):
+            setup = {}
+        result.append({
+            "setup_id": row["setup_id"],
+            "symbol": row["inst_id"],
+            "direction": row["direction"],
+            "score": row["score"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "entry_low": setup.get("entry_low"),
+            "entry_high": setup.get("entry_high"),
+            "stop_loss": setup.get("stop_loss"),
+            "take_profit_1": setup.get("take_profit_1"),
+            "take_profit_2": setup.get("take_profit_2"),
+            "risk_reward": setup.get("risk_reward"),
+            "confirmations": setup.get("reasons", [])[:12],
+            "warnings": setup.get("warnings", [])[:6],
+            "order_flow_score": setup.get("order_flow_score", 0),
+            "rsi_15m": setup.get("rsi_15m"),
+            "rsi_1h": setup.get("rsi_1h"),
+            "rsi_4h": setup.get("rsi_4h"),
+            "funding_rate": setup.get("funding_rate"),
+            "volume_ratio": setup.get("volume_ratio"),
+        })
+    return result
+
+
+async def market_snapshot() -> list[dict]:
+    symbols = ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
+    url = "https://www.okx.com/api/v5/market/ticker"
+    timeout = aiohttp.ClientTimeout(total=8)
+    result = []
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for inst_id in symbols:
+            try:
+                async with session.get(url, params={"instId": inst_id}) as response:
+                    payload = await response.json()
+                item = payload.get("data", [{}])[0]
+                last = float(item.get("last") or 0)
+                open_24h = float(item.get("open24h") or last or 1)
+                change = (last - open_24h) / open_24h * 100
+            except Exception:
+                last, change = 0.0, 0.0
+            result.append({"symbol": inst_id.split("-")[0], "price": last, "change": change})
+    return result
 
 
 def request_user(request: web.Request) -> dict:
     return validate_init_data(request.headers.get("X-Telegram-Init-Data", ""))
 
 
-def user_payload(telegram_user: dict) -> dict:
-    user_id = int(telegram_user.get("id") or 0)
-    db_user = get_user(user_id) if user_id else None
-    return {
-        "id": user_id,
-        "first_name": telegram_user.get("first_name") or (db_user[2] if db_user else "Trader"),
-        "username": telegram_user.get("username") or (db_user[1] if db_user else None),
-        "balance": float(db_user[3] or 0) if db_user else 0.0,
-        "vip": bool(db_user[4]) if db_user else False,
-        "referrals": int(db_user[5] or 0) if db_user else 0,
-        "discount": get_total_discount(user_id) if user_id else 0,
-        "free_remaining": get_remaining_free_signals(user_id) if user_id else FREE_SIGNALS_LIMIT,
-        "free_limit": FREE_SIGNALS_LIMIT,
-        "vip_until": db_user[8] if db_user else None,
-        "plan": db_user[9] if db_user else None,
-    }
-
-
-def normalize_signal(signal: dict) -> dict:
-    item = dict(signal)
-    raw = item.get("confirmations_json")
-    try:
-        item["confirmations"] = json.loads(raw) if raw else []
-    except (TypeError, json.JSONDecodeError):
-        item["confirmations"] = []
-    item.pop("confirmations_json", None)
-    score = item.get("score")
-    item["quality_label"] = (
-        "PREMIUM" if score is not None and int(score) >= 85
-        else "STRONG" if score is not None and int(score) >= 75
-        else "STANDARD"
-    )
-    return item
-
-
-async def market_snapshot() -> list[dict]:
-    symbols = ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
-    url = "https://www.okx.com/api/v5/market/ticker"
-    timeout = aiohttp.ClientTimeout(total=5)
-    result = []
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        for inst_id in symbols:
-            try:
-                async with session.get(url, params={"instId": inst_id}) as response:
-                    response.raise_for_status()
-                    payload = await response.json()
-                item = payload.get("data", [{}])[0]
-                last = float(item.get("last") or 0)
-                open_24h = float(item.get("open24h") or last or 1)
-                change = (last - open_24h) / open_24h * 100
-            except Exception as exc:
-                LOGGER.warning("Market request failed for %s: %s", inst_id, exc)
-                last, change = 0.0, 0.0
-            result.append({"symbol": inst_id.split("-")[0], "price": last, "change": change})
-    return result
-
-
-async def api_profile(request: web.Request) -> web.Response:
-    return web.json_response({"user": user_payload(request_user(request))})
-
-
-async def api_statistics(request: web.Request) -> web.Response:
-    user_id = int(request_user(request)["id"])
-    return web.json_response({"stats": get_user_signal_statistics(user_id)})
-
-
-async def api_analytics(request: web.Request) -> web.Response:
-    user_id = int(request_user(request)["id"])
-    return web.json_response({"analytics": get_user_signal_analytics(user_id)})
-
-
-async def api_signals(request: web.Request) -> web.Response:
-    user_id = int(request_user(request)["id"])
-    limit = max(1, min(int(request.query.get("limit", "30")), 50))
-    items = [normalize_signal(x) for x in get_user_signal_history(user_id, limit=limit)]
-    return web.json_response({"signals": items})
-
-
-async def api_market(_: web.Request) -> web.Response:
-    return web.json_response({"market": await market_snapshot()})
-
-
 async def dashboard(request: web.Request) -> web.Response:
     telegram_user = request_user(request)
-    user_id = int(telegram_user["id"])
+    user_id = int(telegram_user.get("id") or 0)
+    db_user = get_user(user_id) if user_id else None
+    stats = get_user_signal_statistics(user_id) if user_id else {
+        "total": 0, "wins": 0, "losses": 0, "breakeven": 0, "active": 0,
+        "tp1": 0, "tp2": 0, "tp3": 0, "winrate": 0.0,
+        "total_result": 0.0, "average_result": 0.0, "average_rr": 0.0,
+    }
+    history = [serialize_signal(x) for x in get_user_signal_history(user_id, limit=30)] if user_id else []
+    vip = bool(db_user[4]) if db_user else False
+    referrals = int(db_user[5] or 0) if db_user else 0
+
     return web.json_response({
-        "user": user_payload(telegram_user),
-        "stats": get_user_signal_statistics(user_id),
-        "analytics": get_user_signal_analytics(user_id),
-        "history": [normalize_signal(x) for x in get_user_signal_history(user_id, limit=30)],
+        "user": {
+            "id": user_id,
+            "first_name": telegram_user.get("first_name", "Trader"),
+            "username": telegram_user.get("username"),
+            "vip": vip,
+            "referrals": referrals,
+            "discount": get_total_discount(user_id) if user_id else 0,
+            "free_remaining": get_remaining_free_signals(user_id) if user_id else FREE_SIGNALS_LIMIT,
+            "free_limit": FREE_SIGNALS_LIMIT,
+            "is_admin": user_id == int(ADMIN_ID),
+        },
+        "stats": stats,
+        "history": history,
         "market": await market_snapshot(),
-        "server": {"status": "online", "version": "2.1"},
+        "system": {
+            "api": "online",
+            "signal_monitor": "active",
+            "scanner_setups": len(latest_scanner_setups(20)),
+            "updated_at": int(time.time()),
+        },
+    })
+
+
+async def scanner(request: web.Request) -> web.Response:
+    telegram_user = request_user(request)
+    user_id = int(telegram_user.get("id") or 0)
+    is_admin = user_id == int(ADMIN_ID)
+    setups = latest_scanner_setups(12 if is_admin else 5)
+    if not is_admin:
+        setups = [item for item in setups if item["status"] == "published" and item["score"] >= 72]
+    return web.json_response({
+        "is_admin": is_admin,
+        "setups": setups,
+        "message": (
+            "Показаны реальные последние результаты AI Scanner."
+            if setups else "Подходящих сетапов в базе пока нет."
+        ),
     })
 
 
 async def health(_: web.Request) -> web.Response:
-    return web.json_response({"status": "ok", "service": "LiquidityPlus Mini App API", "version": "2.1"})
+    return web.json_response({"ok": True, "service": "LiquidityPlus Mini App API", "version": "3.0", "time": int(time.time())})
 
 
 async def index(_: web.Request) -> web.FileResponse:
     return web.FileResponse(WEBAPP_DIR / "index.html")
 
 
-@web.middleware
-async def error_middleware(request: web.Request, handler):
-    try:
-        return await handler(request)
-    except web.HTTPException:
-        raise
-    except Exception as exc:
-        LOGGER.exception("Mini App API error on %s", request.path)
-        return web.json_response({"error": "internal_error", "message": str(exc)}, status=500)
-
-
 def create_app() -> web.Application:
-    create_tables()
-    create_signal_tables()
-    app = web.Application(middlewares=[error_middleware])
+    app = web.Application()
     app.router.add_get("/", index)
     app.router.add_get("/health", health)
     app.router.add_get("/api/dashboard", dashboard)
-    app.router.add_get("/api/profile", api_profile)
-    app.router.add_get("/api/statistics", api_statistics)
-    app.router.add_get("/api/signals", api_signals)
-    app.router.add_get("/api/analytics", api_analytics)
-    app.router.add_get("/api/market", api_market)
+    app.router.add_get("/api/scanner", scanner)
     app.router.add_static("/static/", WEBAPP_DIR, show_index=False)
     return app
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    port = int(os.getenv("PORT", os.getenv("WEBAPP_PORT", "8080")))
+    port = int(os.getenv("PORT") or os.getenv("WEBAPP_PORT", "8080"))
     web.run_app(create_app(), host="0.0.0.0", port=port)

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#070707">
   <title>LiquidityPlus</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=3.0">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -18,7 +18,7 @@
         <div class="eyebrow">LIQUIDITY PLUS</div>
         <h1>Trading Terminal</h1>
       </div>
-      <div><div class="status"><span></span> LIVE</div><small id="api-status" class="api-status">Подключение…</small></div>
+      <div class="status"><span></span> LIVE</div>
     </header>
 
     <section class="hero card">
@@ -58,7 +58,6 @@
       <button class="tab active" data-page="dashboard">Обзор</button>
       <button class="tab" data-page="signals">Сигналы</button>
       <button class="tab" data-page="scanner">AI Scanner</button>
-      <button class="tab" data-page="analytics">Статистика</button>
       <button class="tab" data-page="profile">Профиль</button>
     </nav>
 
@@ -80,7 +79,13 @@
 
     <section class="page" id="page-signals">
       <article class="card">
-        <div class="section-title"><h3>История сигналов</h3></div>
+        <div class="section-title"><h3>История сигналов</h3><button class="mini-button" id="refresh-data">Обновить</button></div>
+        <div class="filters" id="signal-filters">
+          <button class="filter active" data-filter="all">Все</button>
+          <button class="filter" data-filter="active">Активные</button>
+          <button class="filter" data-filter="win">Плюс</button>
+          <button class="filter" data-filter="loss">Минус</button>
+        </div>
         <div id="all-signals" class="signal-list"></div>
       </article>
     </section>
@@ -90,35 +95,10 @@
         <div class="scanner-orb">AI</div>
         <h3>Liquidity AI Scanner</h3>
         <p>Funding · OI · RSI · Volume · CVD · FVG · Order Blocks · Liquidity</p>
-        <div class="progress"><i></i></div>
-        <button class="primary" id="scanner-button">Запустить анализ</button>
+        <div class="progress"><i id="scanner-progress"></i></div>
+        <button class="primary" id="scanner-button">Загрузить реальные сетапы</button>
         <div id="scanner-result" class="scanner-result"></div>
-      </article>
-    </section>
-
-
-    <section class="page" id="page-analytics">
-      <section class="period-grid">
-        <article class="metric card"><small>Сегодня</small><strong id="result-day">+0.00%</strong></article>
-        <article class="metric card"><small>Неделя</small><strong id="result-week">+0.00%</strong></article>
-        <article class="metric card"><small>Месяц</small><strong id="result-month">+0.00%</strong></article>
-        <article class="metric card"><small>Всё время</small><strong id="result-all">+0.00%</strong></article>
-      </section>
-      <article class="card">
-        <div class="section-title"><h3>Кривая результатов</h3><span id="curve-caption">0 сделок</span></div>
-        <div id="equity-chart" class="equity-chart"><div class="empty">Закрытых сигналов пока нет</div></div>
-      </article>
-      <article class="card">
-        <div class="section-title"><h3>Качество сигналов</h3></div>
-        <div class="quality-summary">
-          <div><small>Средний Score</small><b id="avg-score">0/100</b></div>
-          <div><small>Confidence</small><b id="avg-confidence">0%</b></div>
-          <div><small>Premium</small><b id="premium-count">0</b></div>
-        </div>
-      </article>
-      <article class="card">
-        <div class="section-title"><h3>Лучшие монеты</h3></div>
-        <div id="best-coins" class="coin-list"><div class="empty">Данных пока нет</div></div>
+        <div id="scanner-setups" class="signal-list scanner-list"></div>
       </article>
     </section>
 
@@ -129,13 +109,14 @@
         <div class="profile-line"><span>VIP</span><b id="profile-vip">—</b></div>
         <div class="profile-line"><span>Скидка</span><b id="profile-discount">0%</b></div>
         <div class="profile-line"><span>Бесплатные сигналы</span><b id="profile-free">—</b></div>
-        <div class="profile-line"><span>Тариф</span><b id="profile-plan">FREE</b></div>
-        <button class="secondary" id="refresh-data">Обновить данные</button>
+        <div class="profile-line"><span>TP1 / TP2 / TP3</span><b id="profile-tps">0 / 0 / 0</b></div>
+        <div class="profile-line"><span>Средний результат</span><b id="profile-average">0%</b></div>
+        <div class="profile-line"><span>Средний RR</span><b id="profile-rr">0</b></div>
         <button class="primary" id="close-app">Вернуться в Telegram</button>
       </article>
     </section>
   </main>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=3.0"></script>
 </body>
 </html>

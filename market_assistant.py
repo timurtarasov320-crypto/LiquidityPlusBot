@@ -2231,10 +2231,12 @@ async def publish_setup(
         ),
         risk="Не более 0.5–1%",
         comment=(
-            "Сетап подтверждён техническим "
-            "анализом и Order Flow, "
-            "затем одобрен администратором."
+            "Сетап подтверждён техническим анализом, "
+            "Order Flow и затем одобрен администратором."
         ),
+        score=setup.score,
+        confirmations=setup.reasons,
+        warnings=setup.warnings,
     )
 
     signal = get_signal(signal_id)
