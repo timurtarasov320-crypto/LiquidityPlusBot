@@ -146,6 +146,7 @@ document.querySelectorAll(".tab").forEach(btn=>{
     document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));
     btn.classList.add("active"); $(`page-${btn.dataset.page}`).classList.add("active");
     if(btn.dataset.page==="scanner") loadScanner();
+    if(btn.dataset.page==="analytics") loadAnalytics();
   });
 });
 
@@ -158,3 +159,32 @@ $("scanner-button").addEventListener("click",loadScanner);
 $("refresh-data").addEventListener("click",load);
 $("close-app").addEventListener("click",()=>tg?.close());
 load();
+
+
+let analyticsPeriod = "all";
+function signedPct(value){ const n=Number(value||0); return `${n>=0?"+":""}${n.toFixed(2)}%`; }
+function drawEquityCurve(points){
+  const canvas=$("equity-chart"), empty=$("chart-empty"); if(!canvas) return;
+  const ctx=canvas.getContext("2d"); const ratio=window.devicePixelRatio||1; const w=canvas.clientWidth||700,h=260;
+  canvas.width=w*ratio; canvas.height=h*ratio; ctx.scale(ratio,ratio); ctx.clearRect(0,0,w,h);
+  if(!points?.length){ empty.style.display="block"; return; } empty.style.display="none";
+  const vals=points.map(x=>Number(x.value||0)); const min=Math.min(0,...vals), max=Math.max(0,...vals); const range=(max-min)||1; const pad=24;
+  ctx.strokeStyle="rgba(255,255,255,.12)"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(pad,h-pad); ctx.lineTo(w-pad,h-pad); ctx.stroke();
+  ctx.strokeStyle="#d7ff38"; ctx.lineWidth=3; ctx.beginPath();
+  points.forEach((p,i)=>{ const x=pad+(w-2*pad)*(points.length===1?.5:i/(points.length-1)); const y=h-pad-(Number(p.value)-min)/range*(h-2*pad); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke();
+  ctx.fillStyle="#d7ff38"; const last=points[points.length-1]; const lx=points.length===1?w/2:w-pad; const ly=h-pad-(Number(last.value)-min)/range*(h-2*pad); ctx.beginPath(); ctx.arc(lx,ly,4,0,Math.PI*2); ctx.fill();
+}
+function compactSignal(s,label){ if(!s) return `${label}<br><b>Нет данных</b>`; return `${label}<br><b>${escapeHtml(s.symbol||"—")} ${escapeHtml(s.direction||"")}</b><br><span>${signedPct(s.result_percent)}</span>`; }
+async function loadAnalytics(){
+  try{
+    const res=await api(`/api/analytics?period=${analyticsPeriod}`); if(!res.ok) throw new Error(await res.text()); const d=await res.json();
+    setText("analytics-winrate",`${Number(d.winrate).toFixed(1)}%`); setText("analytics-pnl",signedPct(d.total_result)); setText("analytics-average",signedPct(d.average_result)); setText("analytics-closed",d.closed);
+    $("best-signal").innerHTML=compactSignal(d.best,"Лучший"); $("worst-signal").innerHTML=compactSignal(d.worst,"Худший");
+    $("long-stats").innerHTML=`<b>LONG</b><br>${d.long.count} сделок · WR ${Number(d.long.winrate).toFixed(1)}% · ${signedPct(d.long.result)}`;
+    $("short-stats").innerHTML=`<b>SHORT</b><br>${d.short.count} сделок · WR ${Number(d.short.winrate).toFixed(1)}% · ${signedPct(d.short.result)}`;
+    $("closed-signals").innerHTML=(d.recent_closed||[]).map(signalCard).join("")||'<div class="empty">Закрытых сигналов нет</div>'; drawEquityCurve(d.curve);
+  }catch(e){ console.error(e); $("closed-signals").innerHTML=`<div class="empty">${escapeHtml(e.message)}</div>`; }
+}
+document.querySelectorAll(".period-filter").forEach(btn=>btn.addEventListener("click",()=>{document.querySelectorAll(".period-filter").forEach(x=>x.classList.remove("active"));btn.classList.add("active");analyticsPeriod=btn.dataset.period;loadAnalytics();}));
+$("analytics-refresh")?.addEventListener("click",loadAnalytics);
+window.addEventListener("resize",()=>{ if(document.querySelector('[data-page="analytics"]')?.classList.contains("active")) loadAnalytics(); });

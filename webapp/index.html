@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#070707">
   <title>LiquidityPlus</title>
-  <link rel="stylesheet" href="/static/styles.css?v=3.1">
+  <link rel="stylesheet" href="/static/styles.css?v=3.2">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -58,6 +58,7 @@
       <button class="tab active" data-page="dashboard">Обзор</button>
       <button class="tab" data-page="signals">Сигналы</button>
       <button class="tab" data-page="scanner">AI Scanner</button>
+      <button class="tab" data-page="analytics">Статистика</button>
       <button class="tab" data-page="profile">Профиль</button>
     </nav>
 
@@ -102,6 +103,35 @@
       </article>
     </section>
 
+
+    <section class="page" id="page-analytics">
+      <article class="card">
+        <div class="section-title"><h3>Расширенная статистика</h3><button class="mini-button" id="analytics-refresh">Обновить</button></div>
+        <div class="filters" id="analytics-periods">
+          <button class="period-filter" data-period="day">Сегодня</button>
+          <button class="period-filter" data-period="week">Неделя</button>
+          <button class="period-filter" data-period="month">Месяц</button>
+          <button class="period-filter active" data-period="all">Всё время</button>
+        </div>
+        <div class="analytics-grid">
+          <div><small>Win Rate</small><strong id="analytics-winrate">0%</strong></div>
+          <div><small>Общий PnL</small><strong id="analytics-pnl">0%</strong></div>
+          <div><small>Средняя сделка</small><strong id="analytics-average">0%</strong></div>
+          <div><small>Закрыто</small><strong id="analytics-closed">0</strong></div>
+        </div>
+        <div class="chart-wrap"><canvas id="equity-chart" width="700" height="260"></canvas><div id="chart-empty" class="empty">Нет закрытых сигналов</div></div>
+      </article>
+      <article class="card">
+        <div class="section-title"><h3>Лучший и худший сигнал</h3></div>
+        <div class="best-worst"><div id="best-signal" class="mini-stat">—</div><div id="worst-signal" class="mini-stat">—</div></div>
+      </article>
+      <article class="card">
+        <div class="section-title"><h3>LONG / SHORT</h3></div>
+        <div class="side-grid"><div id="long-stats">LONG: —</div><div id="short-stats">SHORT: —</div></div>
+      </article>
+      <article class="card"><div class="section-title"><h3>Последние закрытые</h3></div><div id="closed-signals" class="signal-list"></div></article>
+    </section>
+
     <section class="page" id="page-profile">
       <article class="card profile-card">
         <h3>Личный кабинет</h3>
@@ -117,6 +147,6 @@
     </section>
   </main>
 
-  <script src="/static/app.js?v=3.1"></script>
+  <script src="/static/app.js?v=3.2"></script>
 </body>
 </html>

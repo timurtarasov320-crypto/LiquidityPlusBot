@@ -232,8 +232,69 @@ async def scanner(request: web.Request) -> web.Response:
     })
 
 
+
+def analytics_period_days(period: str) -> int | None:
+    return {"day": 1, "week": 7, "month": 30, "all": None}.get(period, None)
+
+
+def build_analytics(user_id: int, period: str = "all") -> dict:
+    days = analytics_period_days(period)
+    connection = sqlite3.connect(data_path("signals.db"))
+    connection.row_factory = sqlite3.Row
+    params: list[object] = [user_id]
+    where = "r.user_id = ?"
+    if days is not None:
+        where += " AND datetime(COALESCE(s.closed_at, s.created_at)) >= datetime('now', ?)"
+        params.append(f"-{days} days")
+    rows = connection.execute(f"""
+        SELECT s.* FROM signal_recipients r
+        JOIN signals s ON s.signal_id = r.signal_id
+        WHERE {where}
+        ORDER BY datetime(COALESCE(s.closed_at, s.created_at)) ASC, s.signal_id ASC
+    """, params).fetchall()
+    connection.close()
+    items = [dict(row) for row in rows]
+    closed = [x for x in items if x.get("status") in {"win", "loss", "breakeven"}]
+    results = [float(x.get("result_percent") or 0) for x in closed]
+    wins = sum(1 for x in closed if x.get("status") == "win")
+    losses = sum(1 for x in closed if x.get("status") == "loss")
+    resolved = wins + losses
+    cumulative = 0.0
+    curve = []
+    for x in closed:
+        cumulative += float(x.get("result_percent") or 0)
+        curve.append({"label": (x.get("closed_at") or x.get("created_at") or "")[:10], "value": round(cumulative, 4)})
+    best = max(closed, key=lambda x: float(x.get("result_percent") or 0), default=None)
+    worst = min(closed, key=lambda x: float(x.get("result_percent") or 0), default=None)
+    long_items = [x for x in closed if str(x.get("direction") or "").upper() == "LONG"]
+    short_items = [x for x in closed if str(x.get("direction") or "").upper() == "SHORT"]
+    def side_summary(side):
+        side_wins = sum(1 for x in side if x.get("status") == "win")
+        side_losses = sum(1 for x in side if x.get("status") == "loss")
+        denom = side_wins + side_losses
+        return {"count": len(side), "winrate": side_wins / denom * 100 if denom else 0.0, "result": sum(float(x.get("result_percent") or 0) for x in side)}
+    return {
+        "period": period, "total": len(items), "closed": len(closed), "active": sum(1 for x in items if x.get("status") == "active"),
+        "wins": wins, "losses": losses, "breakeven": sum(1 for x in closed if x.get("status") == "breakeven"),
+        "winrate": wins / resolved * 100 if resolved else 0.0,
+        "total_result": sum(results), "average_result": sum(results) / len(results) if results else 0.0,
+        "best": serialize_signal(best) if best else None, "worst": serialize_signal(worst) if worst else None,
+        "long": side_summary(long_items), "short": side_summary(short_items), "curve": curve[-60:],
+        "recent_closed": [serialize_signal(x) for x in reversed(closed[-20:])],
+    }
+
+
+async def analytics(request: web.Request) -> web.Response:
+    telegram_user = request_user(request)
+    user_id = int(telegram_user.get("id") or 0)
+    period = request.query.get("period", "all")
+    if period not in {"day", "week", "month", "all"}:
+        period = "all"
+    return web.json_response(build_analytics(user_id, period) if user_id else build_analytics(0, period))
+
+
 async def health(_: web.Request) -> web.Response:
-    return web.json_response({"ok": True, "service": "LiquidityPlus Mini App API", "version": "3.1", "time": int(time.time())})
+    return web.json_response({"ok": True, "service": "LiquidityPlus Mini App API", "version": "3.2", "time": int(time.time())})
 
 
 async def index(_: web.Request) -> web.FileResponse:
@@ -246,6 +307,7 @@ def create_app() -> web.Application:
     app.router.add_get("/health", health)
     app.router.add_get("/api/dashboard", dashboard)
     app.router.add_get("/api/scanner", scanner)
+    app.router.add_get("/api/analytics", analytics)
     app.router.add_static("/static/", WEBAPP_DIR, show_index=False)
     return app
 
