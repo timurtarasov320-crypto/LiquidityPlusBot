@@ -229,6 +229,38 @@ def stop_reached(direction:str,current_price:float,stop_price:float)->bool:
     return current_price<=stop_price if direction.upper()=="LONG" else current_price>=stop_price
 
 
+
+
+def validate_signal_levels(
+    direction: str,
+    entry_low: float,
+    entry_high: float,
+    stop: float,
+    targets: list[float],
+) -> tuple[bool, str]:
+    direction = direction.upper()
+    if entry_low <= 0 or entry_high <= 0 or stop <= 0 or any(target <= 0 for target in targets):
+        return False, "уровни должны быть больше нуля"
+    if entry_low > entry_high:
+        return False, "нижняя граница входа выше верхней"
+    if direction == "LONG":
+        if stop >= entry_low:
+            return False, "для LONG стоп должен быть ниже зоны входа"
+        if any(target <= entry_high for target in targets):
+            return False, "для LONG тейки должны быть выше зоны входа"
+        if targets != sorted(targets):
+            return False, "для LONG тейки должны идти по возрастанию"
+    elif direction == "SHORT":
+        if stop <= entry_high:
+            return False, "для SHORT стоп должен быть выше зоны входа"
+        if any(target >= entry_low for target in targets):
+            return False, "для SHORT тейки должны быть ниже зоны входа"
+        if targets != sorted(targets, reverse=True):
+            return False, "для SHORT тейки должны идти по убыванию"
+    else:
+        return False, "направление должно быть LONG или SHORT"
+    return True, ""
+
 def entry_was_reached(current:float,last:Optional[float],low:float,high:float)->bool:
     if low<=current<=high:return True
     if last is None:return False
@@ -300,7 +332,14 @@ async def process_signal(bot:Bot,session:aiohttp.ClientSession,signal:dict[str,A
     low,high=parse_entry_range(signal.get('entry')); entry=parse_number(signal.get('entry_price_numeric')) or parse_entry_price(signal.get('entry')); stop=parse_number(signal.get('stop_loss')); tp1=parse_number(signal.get('take_profit_1')); tp2=parse_number(signal.get('take_profit_2')); tp3=parse_number(signal.get('take_profit_3')); last=parse_number(signal.get('last_checked_price'))
     update_last_price(sid,current,entry)
     if entry is None or low is None or high is None or stop is None:
-        print(f"Сигнал #{sid}: не удалось разобрать уровни"); return
+        print(f"Сигнал #{sid}: не удалось разобрать уровни")
+        return
+
+    targets = [target for target in (tp1, tp2, tp3) if target is not None]
+    levels_valid, levels_error = validate_signal_levels(direction, low, high, stop, targets)
+    if not levels_valid:
+        print(f"Сигнал #{sid}: мониторинг пропущен — {levels_error}")
+        return
     if not bool(signal.get('entry_reached',0)):
         if not entry_was_reached(current,last,low,high): return
         if not mark_entry_reached(sid,entry): return

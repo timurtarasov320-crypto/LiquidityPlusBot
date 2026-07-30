@@ -8,6 +8,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
+    CopyTextButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -99,6 +100,24 @@ def create_signal_tables() -> None:
             PRIMARY KEY (signal_id, user_id)
         )
         """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS signal_user_actions (
+            signal_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (signal_id, user_id)
+        )
+        """
+    )
+
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_signal_user_actions_signal "
+        "ON signal_user_actions(signal_id)"
     )
 
     cursor.execute("PRAGMA table_info(signal_recipients)")
@@ -627,6 +646,33 @@ def _json_list(value) -> list[str]:
         return []
 
 
+
+
+def score_to_stars(score: object) -> float | None:
+    """Convert a 0-100 setup score to a conservative 0-5 star rating."""
+    if score is None:
+        return None
+    try:
+        value = max(0, min(int(score), 100))
+    except (TypeError, ValueError):
+        return None
+
+    if value == 100:
+        return 5.0
+    return (value // 10) * 0.5
+
+
+def format_signal_rating(score: object) -> str | None:
+    stars = score_to_stars(score)
+    if stars is None:
+        return None
+    return f"{int(score)}/100 · ⭐ {stars:.1f}/5"
+
+
+def _copy_value(value: object) -> str:
+    text = str(value or "—").strip()
+    return text[:256]
+
 def format_signal(signal: dict) -> str:
     direction = signal["direction"].upper()
 
@@ -643,10 +689,9 @@ def format_signal(signal: dict) -> str:
         f"Направление: {direction_text}",
     ]
 
-    if signal.get("score") is not None:
-        lines.append(
-            f"Оценка сетапа: {int(signal['score'])}/100"
-        )
+    rating = format_signal_rating(signal.get("score"))
+    if rating:
+        lines.append(f"Рейтинг сигнала: {rating}")
 
     confirmations = _json_list(signal.get("confirmations_json"))
     warnings = _json_list(signal.get("warnings_json"))
@@ -725,12 +770,145 @@ def signal_admin_keyboard(
     )
 
 
-def signal_user_keyboard(symbol: str) -> InlineKeyboardMarkup:
+def get_signal_action_counts(signal_id: int) -> dict[str, int]:
+    counts = {"accept": 0, "reject": 0}
+    connection = connect_signals_db()
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        SELECT action, COUNT(*) AS amount
+        FROM signal_user_actions
+        WHERE signal_id = ?
+        GROUP BY action
+        """,
+        (signal_id,),
+    )
+    for row in cursor.fetchall():
+        if row["action"] in counts:
+            counts[row["action"]] = int(row["amount"] or 0)
+    connection.close()
+    return counts
+
+
+def save_signal_user_action(signal_id: int, user_id: int, action: str) -> None:
+    if action not in {"accept", "reject"}:
+        raise ValueError("Недопустимое действие пользователя.")
+
+    now = datetime.now(timezone.utc).isoformat()
+    connection = connect_signals_db()
+    connection.execute(
+        """
+        INSERT INTO signal_user_actions (
+            signal_id, user_id, action, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(signal_id, user_id) DO UPDATE SET
+            action = excluded.action,
+            updated_at = excluded.updated_at
+        """,
+        (signal_id, user_id, action, now, now),
+    )
+    connection.commit()
+    connection.close()
+
+
+def get_signal_user_action(signal_id: int, user_id: int) -> str | None:
+    connection = connect_signals_db()
+    row = connection.execute(
+        """
+        SELECT action
+        FROM signal_user_actions
+        WHERE signal_id = ? AND user_id = ?
+        LIMIT 1
+        """,
+        (signal_id, user_id),
+    ).fetchone()
+    connection.close()
+    return str(row["action"]) if row is not None else None
+
+
+def is_signal_recipient(signal_id: int, user_id: int) -> bool:
+    connection = connect_signals_db()
+    row = connection.execute(
+        """
+        SELECT 1
+        FROM signal_recipients
+        WHERE signal_id = ? AND user_id = ?
+        LIMIT 1
+        """,
+        (signal_id, user_id),
+    ).fetchone()
+    connection.close()
+    return row is not None
+
+
+def signal_user_keyboard(
+    symbol: str,
+    signal_id: int,
+    *,
+    show_decision_buttons: bool = True,
+) -> InlineKeyboardMarkup:
+    signal = get_signal(signal_id) or {}
     normalized = symbol.upper().replace("/", "-")
     base = normalized.split("-", 1)[0]
+    counts = get_signal_action_counts(signal_id)
+
+    copy_rows = [
+        [
+            InlineKeyboardButton(
+                text="📋 Монета",
+                copy_text=CopyTextButton(text=_copy_value(signal.get("symbol") or symbol)),
+            ),
+            InlineKeyboardButton(
+                text="📋 Вход",
+                copy_text=CopyTextButton(text=_copy_value(signal.get("entry"))),
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="📋 TP1",
+                copy_text=CopyTextButton(text=_copy_value(signal.get("take_profit_1"))),
+            ),
+            InlineKeyboardButton(
+                text="📋 Стоп",
+                copy_text=CopyTextButton(text=_copy_value(signal.get("stop_loss"))),
+            ),
+        ],
+    ]
+    optional_targets = []
+    if signal.get("take_profit_2"):
+        optional_targets.append(
+            InlineKeyboardButton(
+                text="📋 TP2",
+                copy_text=CopyTextButton(text=_copy_value(signal.get("take_profit_2"))),
+            )
+        )
+    if signal.get("take_profit_3"):
+        optional_targets.append(
+            InlineKeyboardButton(
+                text="📋 TP3",
+                copy_text=CopyTextButton(text=_copy_value(signal.get("take_profit_3"))),
+            )
+        )
+    if optional_targets:
+        copy_rows.append(optional_targets)
+
+    action_rows = []
+    if show_decision_buttons:
+        action_rows = [
+            [
+                InlineKeyboardButton(
+                    text="✅ Принимаю сигнал",
+                    callback_data=f"signal_action:{signal_id}:accept",
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отклоняю сигнал",
+                    callback_data=f"signal_action:{signal_id}:reject",
+                ),
+            ]
+        ]
 
     return InlineKeyboardMarkup(
-        inline_keyboard=[
+        inline_keyboard=copy_rows + action_rows + [
             [
                 InlineKeyboardButton(
                     text="📈 Открыть OKX",
@@ -740,9 +918,51 @@ def signal_user_keyboard(symbol: str) -> InlineKeyboardMarkup:
                     text="📊 TradingView",
                     url=f"https://www.tradingview.com/chart/?symbol=OKX:{base}USDT.P",
                 ),
-            ]
+            ],
         ]
     )
+
+
+@router.callback_query(F.data.startswith("signal_action:"))
+async def signal_action_callback(callback: CallbackQuery):
+    try:
+        _, raw_signal_id, action = callback.data.split(":", 2)
+        signal_id = int(raw_signal_id)
+    except (ValueError, AttributeError):
+        await callback.answer("Некорректная кнопка.", show_alert=True)
+        return
+
+    signal = get_signal(signal_id)
+    if signal is None:
+        await callback.answer("Сигнал уже не найден.", show_alert=True)
+        return
+
+    if not is_signal_recipient(signal_id, callback.from_user.id):
+        await callback.answer("Этот сигнал не был отправлен вам.", show_alert=True)
+        return
+
+    labels = {
+        "accept": "✅ Сигнал принят",
+        "reject": "❌ Сигнал отклонён",
+    }
+    if action not in labels:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+
+    save_signal_user_action(signal_id, callback.from_user.id, action)
+
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=signal_user_keyboard(
+                str(signal["symbol"]),
+                signal_id,
+                show_decision_buttons=False,
+            )
+        )
+    except Exception:
+        pass
+
+    await callback.answer(labels[action])
 
 
 async def send_signal_to_users(
@@ -786,7 +1006,7 @@ async def send_signal_to_users(
                         "💎 VIP-ДОСТУП\n\n"
                         f"{signal_text}"
                     ),
-                    reply_markup=signal_user_keyboard(signal["symbol"]),
+                    reply_markup=signal_user_keyboard(signal["symbol"], signal_id),
                 )
 
                 save_signal_recipient(
@@ -826,7 +1046,7 @@ async def send_signal_to_users(
                     "Оформите VIP, чтобы получать "
                     "все сигналы без ограничений."
                 ),
-                reply_markup=signal_user_keyboard(signal["symbol"]),
+                reply_markup=signal_user_keyboard(signal["symbol"], signal_id),
             )
 
             registered = register_free_signal(user_id)
@@ -1288,6 +1508,37 @@ async def signals_history(message: Message):
         )
 
     await message.answer("\n".join(lines))
+
+
+@router.message(Command("signalvotes"))
+async def signal_votes(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Нет доступа.")
+        return
+
+    argument = message.text.partition(" ")[2].strip()
+    if not argument.isdigit():
+        await message.answer("Использование: /signalvotes ID")
+        return
+
+    signal_id = int(argument)
+    signal = get_signal(signal_id)
+    if signal is None:
+        await message.answer("Сигнал не найден.")
+        return
+
+    counts = get_signal_action_counts(signal_id)
+    total = sum(counts.values())
+    accept_pct = counts["accept"] / total * 100 if total else 0.0
+    reject_pct = counts["reject"] / total * 100 if total else 0.0
+
+    await message.answer(
+        f"📊 Подтверждения сигнала #{signal_id}\n\n"
+        f"Монета: {signal['symbol']}\n"
+        f"Всего ответов: {total}\n\n"
+        f"✅ Приняли: {counts['accept']} ({accept_pct:.1f}%)\n"
+        f"❌ Отклонили: {counts['reject']} ({reject_pct:.1f}%)"
+    )
 
 
 @router.message(Command("signalstat"))

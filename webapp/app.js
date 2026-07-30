@@ -16,14 +16,32 @@ let activeFilter = "all";
 
 function setText(id, value){ const el=$(id); if(el) el.textContent=value; }
 function api(path){ return fetch(path,{headers:{"X-Telegram-Init-Data":initData}}); }
-function statusText(status){ return ({active:"ACTIVE",win:"WIN",loss:"LOSS",breakeven:"BE"}[status] || String(status || "—").toUpperCase()); }
+function statusText(status, tpStage=0){
+  if(status === "active" && tpStage > 0) return `TP${tpStage} HIT`;
+  return ({active:"ACTIVE",win:"WIN",loss:"STOP",breakeven:"BREAKEVEN"}[status] || String(status || "—").toUpperCase());
+}
+function timeAgo(value){
+  if(!value) return "—";
+  const date = new Date(value);
+  if(Number.isNaN(date.getTime())) return "—";
+  const seconds = Math.max(0, Math.floor((Date.now()-date.getTime())/1000));
+  if(seconds < 60) return `${seconds} сек назад`;
+  const minutes=Math.floor(seconds/60); if(minutes<60) return `${minutes} мин назад`;
+  const hours=Math.floor(minutes/60); if(hours<24) return `${hours} ч назад`;
+  return `${Math.floor(hours/24)} дн назад`;
+}
+function statusClass(status){ return ({active:"active-status",win:"win-status",loss:"loss-status",breakeven:"be-status"}[status] || ""); }
 
 function signalCard(s){
   const dir = String(s.direction || "").toUpperCase();
   const cls = dir === "LONG" ? "long" : "short";
-  const result = s.result_percent == null ? statusText(s.status) : `${Number(s.result_percent)>=0?"+":""}${Number(s.result_percent).toFixed(2)}%`;
+  const result = s.result_percent == null ? statusText(s.status, s.tp_stage) : `${Number(s.result_percent)>=0?"+":""}${Number(s.result_percent).toFixed(2)}%`;
   const confirmations = (s.confirmations || []).slice(0,8);
   const warnings = (s.warnings || []).slice(0,4);
+  const risk = s.risk_percent == null ? "—" : `${Number(s.risk_percent).toFixed(2)}%`;
+  const rr = s.planned_rr == null ? "—" : `1:${Number(s.planned_rr).toFixed(2)}`;
+  const tpStage = Number(s.tp_stage || 0);
+  const progress = s.status === "win" ? 100 : s.status === "loss" ? 0 : tpStage === 3 ? 90 : tpStage === 2 ? 65 : tpStage === 1 ? 35 : 8;
   const details = confirmations.length || warnings.length ? `
     <details>
       <summary>Подтверждения: ${confirmations.length}${warnings.length ? ` · риски: ${warnings.length}` : ""}</summary>
@@ -33,8 +51,10 @@ function signalCard(s){
   return `<div class="signal">
     <h4>#${escapeHtml(s.signal_id)} · ${escapeHtml(s.symbol)}</h4>
     <span class="direction ${cls}">${escapeHtml(dir)}</span>
+    <div class="signal-meta"><span class="status-pill ${statusClass(s.status)}">${escapeHtml(statusText(s.status,s.tp_stage))}</span><span>${escapeHtml(timeAgo(s.created_at))}</span></div>
     <p>Entry ${escapeHtml(s.entry)} · SL ${escapeHtml(s.stop_loss)} · TP1 ${escapeHtml(s.take_profit_1)}</p>
-    <p>Score ${s.score == null ? "—" : escapeHtml(s.score)+"/100"} · Status ${escapeHtml(statusText(s.status))}</p>
+    <p>Риск ${risk} · RR ${rr} · Score ${s.score == null ? "—" : escapeHtml(s.score)+"/100"}</p>
+    <div class="signal-progress"><i style="width:${progress}%"></i></div>
     <span></span><b class="result">${escapeHtml(result)}</b>
     ${details}
   </div>`;

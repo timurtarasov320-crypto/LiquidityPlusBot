@@ -1,0 +1,15 @@
+STAGE 5 — ONE-TIME USER DECISION
+
+Under each new signal, the user sees:
+- ✅ Принимаю сигнал
+- ❌ Отклоняю сигнал
+
+After either choice:
+- the decision is saved in signals.db;
+- both decision buttons disappear;
+- copy, OKX and TradingView buttons remain;
+- later TP/SL message updates do not restore the decision buttons;
+- only the first delivered recipient can make a choice for their own signal message.
+
+Admin statistics:
+/signalvotes SIGNAL_ID

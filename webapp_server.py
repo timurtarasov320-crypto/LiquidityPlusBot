@@ -59,10 +59,50 @@ def parse_json_list(value) -> list[str]:
         return []
 
 
+def _number(value):
+    if value is None:
+        return None
+    text = str(value).replace(",", ".").strip()
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _midpoint(value):
+    if value is None:
+        return None
+    text = str(value).replace("–", "-").replace("—", "-")
+    parts = [part.strip() for part in text.split("-") if part.strip()]
+    numbers = [_number(part) for part in parts]
+    numbers = [number for number in numbers if number is not None]
+    if not numbers:
+        return None
+    return sum(numbers) / len(numbers)
+
+
 def serialize_signal(signal: dict) -> dict:
     item = dict(signal)
     item["confirmations"] = parse_json_list(item.pop("confirmations_json", None))
     item["warnings"] = parse_json_list(item.pop("warnings_json", None))
+
+    entry = _midpoint(item.get("entry"))
+    stop = _midpoint(item.get("stop_loss"))
+    target = _midpoint(item.get("take_profit_1"))
+    if entry is not None and stop is not None and entry:
+        item["risk_percent"] = abs(entry - stop) / abs(entry) * 100
+    else:
+        item["risk_percent"] = None
+    if entry is not None and stop is not None and target is not None and abs(entry - stop) > 0:
+        item["planned_rr"] = abs(target - entry) / abs(entry - stop)
+    else:
+        item["planned_rr"] = None
+
+    item["tp_stage"] = (
+        3 if int(item.get("tp3_hit") or 0) else
+        2 if int(item.get("tp2_hit") or 0) else
+        1 if int(item.get("tp1_hit") or 0) else 0
+    )
     return item
 
 
@@ -193,7 +233,7 @@ async def scanner(request: web.Request) -> web.Response:
 
 
 async def health(_: web.Request) -> web.Response:
-    return web.json_response({"ok": True, "service": "LiquidityPlus Mini App API", "version": "3.0", "time": int(time.time())})
+    return web.json_response({"ok": True, "service": "LiquidityPlus Mini App API", "version": "3.1", "time": int(time.time())})
 
 
 async def index(_: web.Request) -> web.FileResponse:
