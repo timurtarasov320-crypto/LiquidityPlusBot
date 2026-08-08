@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>LiquidityPlus · TradingView</title>
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root{--bg:#080a0d;--panel:#0f1318;--line:#242b33;--gold:#f5b928;--text:#f7f8fa;--muted:#8c96a3;--green:#16c784;--red:#ea3943;--blue:#4285f4;--purple:#a855f7}
+    *{box-sizing:border-box}html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;overflow:hidden}
+    .app{height:100%;display:flex;flex-direction:column}.top{height:58px;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);background:rgba(8,10,13,.96)}
+    .logo{width:34px;height:34px;border:1px solid #654a0f;border-radius:9px;display:grid;place-items:center;color:var(--gold);font-weight:900}.title{min-width:0;flex:1}.title b{display:block;font-size:14px;letter-spacing:.4px}.title span{font-size:12px;color:var(--muted)}
+    .badge{font-size:12px;font-weight:800;padding:6px 9px;border:1px solid var(--line);border-radius:8px;white-space:nowrap}.chart-wrap{position:relative;flex:1;min-height:0}.chart{position:absolute;inset:0}.zones{position:absolute;inset:0;pointer-events:none;overflow:hidden}.zone{position:absolute;left:0;right:70px;border:1px solid;border-radius:4px;opacity:.18}.zone-label{position:absolute;left:8px;top:4px;font-size:11px;font-weight:800;opacity:1}.status{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:10px 14px;background:#111820;border:1px solid var(--line);border-radius:10px;font-size:13px;color:var(--muted);z-index:5;max-width:85%;text-align:center}.bottom{height:42px;padding:0 12px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;background:#090c10;font-size:11px;color:var(--muted)}
+    .bottom a{color:var(--gold);text-decoration:none}.open-tv{color:var(--text)!important;border:1px solid #4a3610;background:#171208;border-radius:7px;padding:6px 9px;font-weight:700}.hidden{display:none}
+    @media(max-width:520px){.top{height:54px;padding:0 10px}.badge{font-size:11px;padding:5px 7px}.bottom{font-size:10px}.zone{right:58px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="logo">LP</div>
+    <div class="title"><b id="pair">BTC / USDT</b><span id="subtitle">LiquidityPlus signal</span></div>
+    <div class="badge" id="direction">—</div>
+  </div>
+  <div class="chart-wrap">
+    <div id="chart" class="chart"></div>
+    <div id="zones" class="zones"></div>
+    <div id="status" class="status">Загрузка графика…</div>
+  </div>
+  <div class="bottom">
+    <span>Разметка LiquidityPlus · график на TradingView Lightweight Charts</span>
+    <a id="official" class="open-tv" target="_blank" rel="noopener">Открыть TradingView ↗</a>
+  </div>
+</div>
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  const symbol = (q.get('symbol') || 'BTC').toUpperCase();
+  const inst = (q.get('inst') || `${symbol}-USDT-SWAP`).toUpperCase();
+  const dir = (q.get('dir') || '').toUpperCase();
+  const sid = q.get('sid') || '';
+  const $ = id => document.getElementById(id);
+  $('pair').textContent = `${symbol} / USDT`;
+  $('subtitle').textContent = sid ? `LiquidityPlus · LP-${sid}` : 'LiquidityPlus signal';
+  $('direction').textContent = dir || 'SIGNAL';
+  $('direction').style.color = dir === 'SHORT' ? '#ea3943' : '#16c784';
+  $('official').href = `https://www.tradingview.com/chart/?symbol=OKX%3A${encodeURIComponent(symbol)}USDT.P`;
+
+  function nums(v){ return (String(v||'').replace(/,/g,'.').match(/-?\d+(?:\.\d+)?/g)||[]).map(Number).filter(Number.isFinite); }
+  function first(v){ const a=nums(v); return a.length?a[0]:null; }
+  function zone(v){ const a=nums(v); if(!a.length)return null; if(a.length===1)return [a[0],a[0]]; return [Math.min(a[0],a[1]),Math.max(a[0],a[1])]; }
+  function midpoint(v){ const z=zone(v); return z?(z[0]+z[1])/2:null; }
+
+  const levels = {
+    entry: midpoint(q.get('entry')),
+    sl: first(q.get('sl')),
+    tp1: first(q.get('tp1')),
+    tp2: first(q.get('tp2')),
+    tp3: first(q.get('tp3')),
+    fvg: zone(q.get('fvg')),
+    ob: zone(q.get('ob')),
+    entryZone: zone(q.get('entry')),
+  };
+
+  const chart = LightweightCharts.createChart($('chart'), {
+    layout:{background:{color:'#080a0d'},textColor:'#a8b0bb'},
+    grid:{vertLines:{color:'#171c22'},horzLines:{color:'#171c22'}},
+    rightPriceScale:{borderColor:'#2a3139',scaleMargins:{top:.08,bottom:.08}},
+    timeScale:{borderColor:'#2a3139',timeVisible:true,secondsVisible:false,rightOffset:8,barSpacing:7},
+    crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
+    localization:{priceFormatter:p=>p>=1000?p.toFixed(2):p>=1?p.toFixed(4):p.toFixed(7)},
+  });
+  const series = chart.addCandlestickSeries({upColor:'#16c784',downColor:'#ea3943',borderVisible:false,wickUpColor:'#16c784',wickDownColor:'#ea3943'});
+
+  function line(price,title,color,style=0,width=1){
+    if(!Number.isFinite(price)) return;
+    series.createPriceLine({price,color,lineWidth:width,lineStyle:style,axisLabelVisible:true,title});
+  }
+  line(levels.entry,'ENTRY','#f5b928',0,2);
+  line(levels.sl,'SL','#ea3943',2,2);
+  line(levels.tp1,'TP1','#16c784',2,1);
+  line(levels.tp2,'TP2','#16c784',2,1);
+  line(levels.tp3,'TP3','#16c784',2,1);
+
+  const zoneSpecs=[];
+  if(levels.entryZone && levels.entryZone[0]!==levels.entryZone[1]) zoneSpecs.push({z:levels.entryZone,label:'ENTRY ZONE',color:'#f5b928'});
+  if(levels.fvg) zoneSpecs.push({z:levels.fvg,label:'FVG',color:'#4285f4'});
+  if(levels.ob) zoneSpecs.push({z:levels.ob,label:'ORDER BLOCK',color:'#a855f7'});
+
+  function drawZones(){
+    const holder=$('zones'); holder.innerHTML='';
+    for(const item of zoneSpecs){
+      const y1=series.priceToCoordinate(item.z[1]); const y2=series.priceToCoordinate(item.z[0]);
+      if(y1==null||y2==null) continue;
+      const d=document.createElement('div'); d.className='zone'; d.style.top=`${Math.min(y1,y2)}px`; d.style.height=`${Math.max(3,Math.abs(y2-y1))}px`; d.style.borderColor=item.color; d.style.background=item.color;
+      const l=document.createElement('span'); l.className='zone-label'; l.style.color=item.color; l.textContent=item.label; d.appendChild(l); holder.appendChild(d);
+    }
+  }
+
+  function swingLevels(c){
+    const src=c.slice(-90); if(src.length<12)return [];
+    let highs=[],lows=[];
+    for(let i=2;i<src.length-2;i++){
+      const x=src[i];
+      if(x.high>src[i-1].high&&x.high>src[i-2].high&&x.high>=src[i+1].high&&x.high>=src[i+2].high) highs.push(x.high);
+      if(x.low<src[i-1].low&&x.low<src[i-2].low&&x.low<=src[i+1].low&&x.low<=src[i+2].low) lows.push(x.low);
+    }
+    const last=src[src.length-1].close;
+    const above=highs.filter(x=>x>last).sort((a,b)=>a-b)[0];
+    const below=lows.filter(x=>x<last).sort((a,b)=>b-a)[0];
+    return [above&&['LIQ ↑',above],below&&['LIQ ↓',below]].filter(Boolean);
+  }
+
+  async function load(){
+    try{
+      const url=`https://www.okx.com/api/v5/market/candles?instId=${encodeURIComponent(inst)}&bar=15m&limit=200`;
+      const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`OKX ${r.status}`);
+      const j=await r.json(); if(j.code!=='0'||!Array.isArray(j.data)) throw new Error(j.msg||'Нет свечей');
+      const candles=j.data.map(x=>({time:Math.floor(Number(x[0])/1000),open:Number(x[1]),high:Number(x[2]),low:Number(x[3]),close:Number(x[4])})).reverse();
+      series.setData(candles);
+      for(const [title,p] of swingLevels(candles)) line(p,title,'#f0a83a',3,1);
+      chart.timeScale().fitContent();
+      $('status').classList.add('hidden');
+      requestAnimationFrame(drawZones);
+    }catch(e){
+      $('status').innerHTML=`Не удалось получить свечи OKX.<br><small>${String(e.message||e)}</small><br><br>Нажмите «Открыть TradingView» ниже.`;
+    }
+  }
+  new ResizeObserver(()=>{chart.applyOptions({width:$('chart').clientWidth,height:$('chart').clientHeight});requestAnimationFrame(drawZones)}).observe($('chart'));
+  chart.timeScale().subscribeVisibleTimeRangeChange(()=>requestAnimationFrame(drawZones));
+  load();
+})();
+</script>
+</body>
+</html>

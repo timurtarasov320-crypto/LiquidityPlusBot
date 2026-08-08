@@ -1,8 +1,11 @@
 import asyncio
 import json
+import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlencode
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -14,7 +17,7 @@ from aiogram.types import (
     Message,
 )
 
-from config import ADMIN_ID
+from config import ADMIN_ID, WEBAPP_URL
 from project_paths import data_path
 from database import get_all_users
 from free_signals import (
@@ -27,6 +30,56 @@ from free_signals import (
 router = Router()
 
 SIGNALS_DB_NAME = data_path("signals.db")
+
+PUBLIC_CHART_URL = os.getenv(
+    "PUBLIC_CHART_URL",
+    "https://timurtarasov320-crypto.github.io/LiquidityPlusBot/chart/",
+).strip()
+
+
+def _extract_zone(items: list[str], kind: str) -> str:
+    """Extract numeric low-high zone from saved scanner confirmations."""
+    if kind == "fvg":
+        patterns = (r"Зона\s+FVG:\s*([^\n]+)",)
+    else:
+        patterns = (r"Order\s+Block:\s*([^\n]+)",)
+
+    for item in items:
+        text = str(item or "")
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+    return ""
+
+
+def build_public_chart_url(signal: dict, symbol: str) -> str:
+    """Build a static-chart URL; no Render/Mini App backend is required."""
+    normalized = str(symbol or signal.get("symbol") or "BTC-USDT-SWAP").upper().replace("/", "-")
+    parts = [part for part in normalized.split("-") if part]
+    base = parts[0] if parts else "BTC"
+    inst_id = normalized if "SWAP" in normalized else f"{base}-USDT-SWAP"
+
+    confirmations = _json_list(signal.get("confirmations_json"))
+    warnings = _json_list(signal.get("warnings_json"))
+    factors = confirmations + warnings
+
+    params = {
+        "sid": str(signal.get("signal_id") or ""),
+        "symbol": base,
+        "inst": inst_id,
+        "dir": str(signal.get("direction") or "").upper(),
+        "entry": str(signal.get("entry") or ""),
+        "sl": str(signal.get("stop_loss") or ""),
+        "tp1": str(signal.get("take_profit_1") or ""),
+        "tp2": str(signal.get("take_profit_2") or ""),
+        "tp3": str(signal.get("take_profit_3") or ""),
+        "fvg": _extract_zone(factors, "fvg"),
+        "ob": _extract_zone(factors, "ob"),
+    }
+    base_url = PUBLIC_CHART_URL.rstrip("/") + "/"
+    return f"{base_url}?{urlencode(params)}"
+
 
 
 def is_admin(user_id: int) -> bool:
@@ -87,6 +140,7 @@ def create_signal_tables() -> None:
             "ALTER TABLE signals "
             "ADD COLUMN warnings_json TEXT DEFAULT NULL"
         )
+
 
     cursor.execute(
         """
@@ -673,81 +727,90 @@ def _copy_value(value: object) -> str:
     text = str(value or "—").strip()
     return text[:256]
 
-def format_signal(signal: dict) -> str:
-    direction = signal["direction"].upper()
 
-    direction_text = (
-        "🟢 LONG"
-        if direction == "LONG"
-        else "🔴 SHORT"
-    )
+
+def format_signal_status(signal: dict) -> str:
+    status = str(signal.get("status") or "active").lower()
+    labels = {
+        "active": "🟢 Активен",
+        "win": "🏆 Закрыт в плюс",
+        "loss": "❌ Закрыт по Stop",
+        "breakeven": "⚪ Закрыт в безубыток",
+    }
+    label = labels.get(status, "🟡 Статус неизвестен")
+    result = signal.get("result_percent")
+    if result is not None and status != "active":
+        try:
+            label += f" · {float(result):+.2f}%"
+        except (TypeError, ValueError):
+            pass
+    return label
+
+def format_signal(signal: dict) -> str:
+    """Compact LiquidityPlus signal card shown in the main chat."""
+    direction = str(signal.get("direction") or "").upper()
+    direction_text = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
 
     lines = [
-        f"📈 ТОРГОВЫЙ СИГНАЛ #{signal['signal_id']}",
+        f"{direction_text} | {signal['symbol']}",
+        f"{format_signal_status(signal)}",
         "",
-        f"Монета: {signal['symbol']}",
-        f"Направление: {direction_text}",
+        f"📍 Вход: {signal['entry']}",
+        f"🛑 Stop: {signal['stop_loss']}",
+        "",
+        f"🎯 TP1: {signal['take_profit_1']}",
     ]
+    if signal.get("take_profit_2"):
+        lines.append(f"🎯 TP2: {signal['take_profit_2']}")
+    if signal.get("take_profit_3"):
+        lines.append(f"🎯 TP3: {signal['take_profit_3']}")
+    if signal.get("risk"):
+        lines.extend(["", f"💼 Риск: {signal['risk']}"])
+
+    lines.extend(["", f"🏷 LiquidityPlus · LP-{signal['signal_id']}"])
+    return "\n".join(lines)
+
+
+def format_signal_details(signal: dict) -> str:
+    """Detailed LiquidityPlus signal view opened by the details button."""
+    direction = str(signal.get("direction") or "").upper()
+    direction_text = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
+    confirmations = _json_list(signal.get("confirmations_json"))
+    warnings = _json_list(signal.get("warnings_json"))
+
+    lines = [
+        "🔎 ПОДРОБНОСТИ СИГНАЛА",
+        "",
+        f"🏷 LiquidityPlus · LP-{signal['signal_id']}",
+        f"💰 Монета: {signal['symbol']}",
+        f"📊 Направление: {direction_text}",
+        f"📌 Статус: {format_signal_status(signal)}",
+        "",
+        f"📍 Вход: {signal['entry']}",
+        f"🛑 Stop Loss: {signal['stop_loss']}",
+        f"🎯 TP1: {signal['take_profit_1']}",
+    ]
+    if signal.get("take_profit_2"):
+        lines.append(f"🎯 TP2: {signal['take_profit_2']}")
+    if signal.get("take_profit_3"):
+        lines.append(f"🎯 TP3: {signal['take_profit_3']}")
+    if signal.get("risk"):
+        lines.extend(["", f"⚠️ Риск: {signal['risk']}"])
 
     rating = format_signal_rating(signal.get("score"))
     if rating:
-        lines.append(f"Рейтинг сигнала: {rating}")
-
-    confirmations = _json_list(signal.get("confirmations_json"))
-    warnings = _json_list(signal.get("warnings_json"))
-    if confirmations:
-        lines.append(f"Подтверждений: {len(confirmations)}")
-
-    lines.extend(
-        [
-            "",
-            f"🎯 Вход: {signal['entry']}",
-        f"🛑 Стоп: {signal['stop_loss']}",
-            f"✅ TP1: {signal['take_profit_1']}",
-        ]
-    )
-
-    if signal.get("take_profit_2"):
-        lines.append(
-            f"✅ TP2: {signal['take_profit_2']}"
-        )
-
-    if signal.get("take_profit_3"):
-        lines.append(
-            f"✅ TP3: {signal['take_profit_3']}"
-        )
-
-    if signal.get("risk"):
-        lines.extend(
-            [
-                "",
-                f"⚠️ Риск: {signal['risk']}",
-            ]
-        )
+        lines.append(f"⭐ Уверенность: {rating}")
 
     if confirmations:
         lines.extend(["", "✅ Подтверждения:"])
-        lines.extend(f"• {item}" for item in confirmations[:10])
-
+        lines.extend(f"• {item}" for item in confirmations[:12])
     if warnings:
         lines.extend(["", "⚠️ Факторы риска:"])
-        lines.extend(f"• {item}" for item in warnings[:6])
-
+        lines.extend(f"• {item}" for item in warnings[:8])
     if signal.get("comment"):
-        lines.extend(
-            [
-                "",
-                f"📝 Комментарий:\n{signal['comment']}",
-            ]
-        )
+        lines.extend(["", "💬 Комментарий аналитика:", str(signal["comment"])])
 
-    lines.extend(
-        [
-            "",
-            "Не превышайте допустимый риск.",
-        ]
-    )
-
+    lines.extend(["", "Соблюдайте собственный риск-менеджмент."])
     return "\n".join(lines)
 
 
@@ -844,83 +907,118 @@ def is_signal_recipient(signal_id: int, user_id: int) -> bool:
 def signal_user_keyboard(
     symbol: str,
     signal_id: int,
-    *,
     show_decision_buttons: bool = True,
 ) -> InlineKeyboardMarkup:
     signal = get_signal(signal_id) or {}
     normalized = symbol.upper().replace("/", "-")
     base = normalized.split("-", 1)[0]
-    counts = get_signal_action_counts(signal_id)
 
-    copy_rows = [
+    rows = [
         [
             InlineKeyboardButton(
-                text="📋 Монета",
+                text="🪙 Монета",
                 copy_text=CopyTextButton(text=_copy_value(signal.get("symbol") or symbol)),
             ),
             InlineKeyboardButton(
-                text="📋 Вход",
-                copy_text=CopyTextButton(text=_copy_value(signal.get("entry"))),
+                text="🛑 Stop",
+                copy_text=CopyTextButton(text=_copy_value(signal.get("stop_loss"))),
             ),
         ],
         [
             InlineKeyboardButton(
-                text="📋 TP1",
+                text="🎯 TP1",
                 copy_text=CopyTextButton(text=_copy_value(signal.get("take_profit_1"))),
             ),
             InlineKeyboardButton(
-                text="📋 Стоп",
-                copy_text=CopyTextButton(text=_copy_value(signal.get("stop_loss"))),
+                text="🎯 TP2",
+                copy_text=CopyTextButton(text=_copy_value(signal.get("take_profit_2"))),
             ),
         ],
-    ]
-    optional_targets = []
-    if signal.get("take_profit_2"):
-        optional_targets.append(
+        [
             InlineKeyboardButton(
-                text="📋 TP2",
-                copy_text=CopyTextButton(text=_copy_value(signal.get("take_profit_2"))),
-            )
-        )
-    if signal.get("take_profit_3"):
-        optional_targets.append(
-            InlineKeyboardButton(
-                text="📋 TP3",
+                text="🎯 TP3",
                 copy_text=CopyTextButton(text=_copy_value(signal.get("take_profit_3"))),
-            )
-        )
-    if optional_targets:
-        copy_rows.append(optional_targets)
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="📊 TradingView",
+                url=build_public_chart_url(signal, symbol),
+            ),
+        ],
+        [InlineKeyboardButton(
+            text="🔎 Подробнее",
+            callback_data=f"signal_details:{signal_id}",
+        )],
+    ]
 
-    action_rows = []
     if show_decision_buttons:
-        action_rows = [
-            [
-                InlineKeyboardButton(
-                    text="✅ Принимаю сигнал",
-                    callback_data=f"signal_action:{signal_id}:accept",
-                ),
-                InlineKeyboardButton(
-                    text="❌ Отклоняю сигнал",
-                    callback_data=f"signal_action:{signal_id}:reject",
-                ),
-            ]
-        ]
+        rows.append([
+            InlineKeyboardButton(
+                text="✅ ПРИНЯТЬ СИГНАЛ",
+                callback_data=f"signal_action:{signal_id}:accept",
+            ),
+            InlineKeyboardButton(
+                text="⏭ ПРОПУСТИТЬ",
+                callback_data=f"signal_action:{signal_id}:reject",
+            ),
+        ])
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=copy_rows + action_rows + [
-            [
-                InlineKeyboardButton(
-                    text="📈 Открыть OKX",
-                    url=f"https://www.okx.com/trade-swap/{base}-USDT-SWAP",
-                ),
-                InlineKeyboardButton(
-                    text="📊 TradingView",
-                    url=f"https://www.tradingview.com/chart/?symbol=OKX:{base}USDT.P",
-                ),
-            ],
-        ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def signal_details_keyboard(signal: dict, user_id: int) -> InlineKeyboardMarkup:
+    signal_id = int(signal["signal_id"])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="⬅️ Назад к сигналу",
+            callback_data=f"signal_back:{signal_id}",
+        )],
+    ])
+
+
+@router.callback_query(F.data.startswith("signal_details:"))
+async def signal_details_callback(callback: CallbackQuery):
+    try:
+        signal_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, AttributeError):
+        await callback.answer("Некорректная кнопка.", show_alert=True)
+        return
+    signal = get_signal(signal_id)
+    if signal is None:
+        await callback.answer("Сигнал не найден.", show_alert=True)
+        return
+    if not is_signal_recipient(signal_id, callback.from_user.id):
+        await callback.answer("Этот сигнал не был отправлен вам.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        format_signal_details(signal),
+        reply_markup=signal_details_keyboard(signal, callback.from_user.id),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("signal_back:"))
+async def signal_back_callback(callback: CallbackQuery):
+    try:
+        signal_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, AttributeError):
+        await callback.answer("Некорректная кнопка.", show_alert=True)
+        return
+    signal = get_signal(signal_id)
+    if signal is None:
+        await callback.answer("Сигнал не найден.", show_alert=True)
+        return
+    user_action = get_signal_user_action(signal_id, callback.from_user.id)
+    await callback.message.edit_text(
+        format_signal(signal),
+        reply_markup=signal_user_keyboard(
+            str(signal["symbol"]),
+            signal_id,
+            show_decision_buttons=(user_action is None),
+        ),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("signal_action:"))
@@ -943,7 +1041,7 @@ async def signal_action_callback(callback: CallbackQuery):
 
     labels = {
         "accept": "✅ Сигнал принят",
-        "reject": "❌ Сигнал отклонён",
+        "reject": "⏭ Сигнал пропущен",
     }
     if action not in labels:
         await callback.answer("Неизвестное действие.", show_alert=True)
@@ -951,6 +1049,8 @@ async def signal_action_callback(callback: CallbackQuery):
 
     save_signal_user_action(signal_id, callback.from_user.id, action)
 
+    # Сразу убираем кнопки решения после первого выбора,
+    # но оставляем полезные кнопки сигнала (TP, Stop, TradingView, Подробнее).
     try:
         await callback.message.edit_reply_markup(
             reply_markup=signal_user_keyboard(
@@ -959,8 +1059,8 @@ async def signal_action_callback(callback: CallbackQuery):
                 show_decision_buttons=False,
             )
         )
-    except Exception:
-        pass
+    except Exception as error:
+        print(f"Не удалось скрыть кнопки решения сигнала #{signal_id}: {error}")
 
     await callback.answer(labels[action])
 
@@ -1764,8 +1864,11 @@ def get_user_signal_statistics(user_id: int) -> dict:
     connection = connect_signals_db()
     rows = connection.execute(
         """
-        SELECT s.* FROM signal_recipients r
+        SELECT s.*, a.action AS user_action
+        FROM signal_recipients r
         JOIN signals s ON s.signal_id = r.signal_id
+        LEFT JOIN signal_user_actions a
+          ON a.signal_id = r.signal_id AND a.user_id = r.user_id
         WHERE r.user_id = ?
         """, (user_id,)
     ).fetchall()
@@ -1775,7 +1878,7 @@ def get_user_signal_statistics(user_id: int) -> dict:
     wins = sum(1 for x in items if x.get("status") == "win")
     losses = sum(1 for x in items if x.get("status") == "loss")
     breakeven = sum(1 for x in items if x.get("status") == "breakeven")
-    active = sum(1 for x in items if x.get("status") == "active")
+    active = sum(1 for x in items if x.get("status") == "active" and x.get("user_action") == "accept")
     tp1 = sum(1 for x in items if int(x.get("tp1_hit") or 0))
     tp2 = sum(1 for x in items if int(x.get("tp2_hit") or 0))
     tp3 = sum(1 for x in items if int(x.get("tp3_hit") or 0))
@@ -1796,23 +1899,75 @@ def get_user_signal_statistics(user_id: int) -> dict:
 def get_user_signal_history(
     user_id: int,
     limit: int = 10,
+    status: str | None = None,
+    offset: int = 0,
 ) -> list[dict]:
+    """Return a user's signal history with an optional status filter."""
     safe_limit = max(1, min(int(limit), 50))
+    safe_offset = max(0, int(offset))
+    allowed_statuses = {"active", "win", "loss", "breakeven"}
 
     connection = connect_signals_db()
     cursor = connection.cursor()
-    cursor.execute(
-        """
-        SELECT s.*
-        FROM signal_recipients r
-        JOIN signals s ON s.signal_id = r.signal_id
-        WHERE r.user_id = ?
-        ORDER BY s.signal_id DESC
-        LIMIT ?
-        """,
-        (user_id, safe_limit),
-    )
+
+    if status in allowed_statuses:
+        cursor.execute(
+            """
+            SELECT s.*
+            FROM signal_recipients r
+            JOIN signals s ON s.signal_id = r.signal_id
+            LEFT JOIN signal_user_actions a
+              ON a.signal_id = r.signal_id AND a.user_id = r.user_id
+            WHERE r.user_id = ? AND s.status = ?
+              AND (? != 'active' OR a.action = 'accept')
+            ORDER BY s.signal_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, status, status, safe_limit, safe_offset),
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT s.*
+            FROM signal_recipients r
+            JOIN signals s ON s.signal_id = r.signal_id
+            WHERE r.user_id = ?
+            ORDER BY s.signal_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, safe_limit, safe_offset),
+        )
 
     rows = cursor.fetchall()
     connection.close()
     return [dict(row) for row in rows]
+
+
+def count_user_signal_history(user_id: int, status: str | None = None) -> int:
+    allowed_statuses = {"active", "win", "loss", "breakeven"}
+    connection = connect_signals_db()
+    if status in allowed_statuses:
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS amount
+            FROM signal_recipients r
+            JOIN signals s ON s.signal_id = r.signal_id
+            LEFT JOIN signal_user_actions a
+              ON a.signal_id = r.signal_id AND a.user_id = r.user_id
+            WHERE r.user_id = ? AND s.status = ?
+              AND (? != 'active' OR a.action = 'accept')
+            """,
+            (user_id, status, status),
+        ).fetchone()
+    else:
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS amount
+            FROM signal_recipients r
+            JOIN signals s ON s.signal_id = r.signal_id
+            WHERE r.user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    connection.close()
+    return int(row["amount"] or 0) if row else 0
