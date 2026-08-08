@@ -28,8 +28,7 @@
     <div id="status" class="status">Загрузка графика…</div>
   </div>
   <div class="bottom">
-    <span>Разметка LiquidityPlus · график на TradingView Lightweight Charts</span>
-    <a id="official" class="open-tv" target="_blank" rel="noopener">Открыть TradingView ↗</a>
+    <span>LiquidityPlus · автоматическая разметка сигнала</span><span id="zoneInfo">FVG · OB · LIQ</span>
   </div>
 </div>
 <script>
@@ -44,7 +43,6 @@
   $('subtitle').textContent = sid ? `LiquidityPlus · LP-${sid}` : 'LiquidityPlus signal';
   $('direction').textContent = dir || 'SIGNAL';
   $('direction').style.color = dir === 'SHORT' ? '#ea3943' : '#16c784';
-  $('official').href = `https://www.tradingview.com/chart/?symbol=OKX%3A${encodeURIComponent(symbol)}USDT.P`;
 
   function nums(v){ return (String(v||'').replace(/,/g,'.').match(/-?\d+(?:\.\d+)?/g)||[]).map(Number).filter(Number.isFinite); }
   function first(v){ const a=nums(v); return a.length?a[0]:null; }
@@ -87,6 +85,36 @@
   if(levels.fvg) zoneSpecs.push({z:levels.fvg,label:'FVG',color:'#4285f4'});
   if(levels.ob) zoneSpecs.push({z:levels.ob,label:'ORDER BLOCK',color:'#a855f7'});
 
+  function atr(c, n=14){
+    if(c.length<2)return 0;
+    const a=[];
+    for(let i=1;i<c.length;i++) a.push(Math.max(c[i].high-c[i].low,Math.abs(c[i].high-c[i-1].close),Math.abs(c[i].low-c[i-1].close)));
+    const x=a.slice(-n); return x.reduce((s,v)=>s+v,0)/(x.length||1);
+  }
+  function detectFvg(c){
+    const recent=c.slice(-90); const last=recent[recent.length-1]?.close;
+    const found=[];
+    for(let i=2;i<recent.length;i++){
+      const a=recent[i-2], x=recent[i];
+      if(x.low>a.high) found.push({z:[a.high,x.low], side:'BULL', age:recent.length-i});
+      if(x.high<a.low) found.push({z:[x.high,a.low], side:'BEAR', age:recent.length-i});
+    }
+    // Prefer recent zones near current price.
+    found.sort((u,v)=>((Math.abs(((u.z[0]+u.z[1])/2)-last))/(last||1)+u.age*.0005)-((Math.abs(((v.z[0]+v.z[1])/2)-last))/(last||1)+v.age*.0005));
+    return found[0]||null;
+  }
+  function detectOb(c, direction){
+    const recent=c.slice(-80); if(recent.length<8)return null;
+    const A=atr(recent,14)||1;
+    for(let i=recent.length-4;i>=2;i--){
+      const x=recent[i], n1=recent[i+1], n2=recent[i+2];
+      const impulse=Math.abs(n2.close-x.close);
+      if(direction==='LONG' && x.close<x.open && n1.close>n1.open && n2.close>n2.open && impulse>A*1.15) return [x.low,x.high];
+      if(direction==='SHORT' && x.close>x.open && n1.close<n1.open && n2.close<n2.open && impulse>A*1.15) return [x.low,x.high];
+    }
+    return null;
+  }
+
   function drawZones(){
     const holder=$('zones'); holder.innerHTML='';
     for(const item of zoneSpecs){
@@ -98,7 +126,7 @@
   }
 
   function swingLevels(c){
-    const src=c.slice(-90); if(src.length<12)return [];
+    const src=c.slice(-100); if(src.length<12)return {};
     let highs=[],lows=[];
     for(let i=2;i<src.length-2;i++){
       const x=src[i];
@@ -106,9 +134,40 @@
       if(x.low<src[i-1].low&&x.low<src[i-2].low&&x.low<=src[i+1].low&&x.low<=src[i+2].low) lows.push(x.low);
     }
     const last=src[src.length-1].close;
-    const above=highs.filter(x=>x>last).sort((a,b)=>a-b)[0];
-    const below=lows.filter(x=>x<last).sort((a,b)=>b-a)[0];
-    return [above&&['LIQ ↑',above],below&&['LIQ ↓',below]].filter(Boolean);
+    return {
+      above: highs.filter(x=>x>last).sort((a,b)=>a-b)[0] || null,
+      below: lows.filter(x=>x<last).sort((a,b)=>b-a)[0] || null,
+    };
+  }
+
+  function addLiquidityZones(c){
+    const sw=swingLevels(c); const pad=(atr(c,14)||0)*0.12;
+    if(Number.isFinite(sw.above)){
+      line(sw.above,'LIQ ↑','#f0a83a',3,1);
+      zoneSpecs.push({z:[sw.above-pad,sw.above+pad],label:'BUY-SIDE LIQUIDITY',color:'#f0a83a'});
+    }
+    if(Number.isFinite(sw.below)){
+      line(sw.below,'LIQ ↓','#f0a83a',3,1);
+      zoneSpecs.push({z:[sw.below-pad,sw.below+pad],label:'SELL-SIDE LIQUIDITY',color:'#f0a83a'});
+    }
+  }
+
+  function ensureStructureZones(c){
+    if(!levels.fvg){ const f=detectFvg(c); if(f) zoneSpecs.push({z:f.z,label:`FVG ${f.side}`,color:'#4285f4'}); }
+    if(!levels.ob){ const z=detectOb(c,dir); if(z) zoneSpecs.push({z,label:'ORDER BLOCK',color:'#a855f7'}); }
+    addLiquidityZones(c);
+  }
+
+  function forcePriceRange(c){
+    const vals=[levels.entry,levels.sl,levels.tp1,levels.tp2,levels.tp3];
+    for(const z of zoneSpecs){ if(z?.z){vals.push(z.z[0],z.z[1]);} }
+    const finite=vals.filter(Number.isFinite); if(!finite.length||!c.length)return;
+    const mn=Math.min(...finite), mx=Math.max(...finite);
+    const firstTime=c[Math.max(0,c.length-80)].time, lastTime=c[c.length-1].time;
+    const lowSeries=chart.addLineSeries({color:'rgba(0,0,0,0)',lineVisible:false,lastValueVisible:false,priceLineVisible:false,crosshairMarkerVisible:false});
+    const highSeries=chart.addLineSeries({color:'rgba(0,0,0,0)',lineVisible:false,lastValueVisible:false,priceLineVisible:false,crosshairMarkerVisible:false});
+    lowSeries.setData([{time:firstTime,value:mn},{time:lastTime,value:mn}]);
+    highSeries.setData([{time:firstTime,value:mx},{time:lastTime,value:mx}]);
   }
 
   async function load(){
@@ -118,12 +177,14 @@
       const j=await r.json(); if(j.code!=='0'||!Array.isArray(j.data)) throw new Error(j.msg||'Нет свечей');
       const candles=j.data.map(x=>({time:Math.floor(Number(x[0])/1000),open:Number(x[1]),high:Number(x[2]),low:Number(x[3]),close:Number(x[4])})).reverse();
       series.setData(candles);
-      for(const [title,p] of swingLevels(candles)) line(p,title,'#f0a83a',3,1);
+      ensureStructureZones(candles);
+      forcePriceRange(candles);
       chart.timeScale().fitContent();
       $('status').classList.add('hidden');
+      $('zoneInfo').textContent = `FVG · OB · LIQ · ${zoneSpecs.length} зон`;
       requestAnimationFrame(drawZones);
     }catch(e){
-      $('status').innerHTML=`Не удалось получить свечи OKX.<br><small>${String(e.message||e)}</small><br><br>Нажмите «Открыть TradingView» ниже.`;
+      $('status').innerHTML=`Не удалось получить свечи OKX.<br><small>${String(e.message||e)}</small>`;
     }
   }
   new ResizeObserver(()=>{chart.applyOptions({width:$('chart').clientWidth,height:$('chart').clientHeight});requestAnimationFrame(drawZones)}).observe($('chart'));

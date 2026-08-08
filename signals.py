@@ -38,18 +38,41 @@ PUBLIC_CHART_URL = os.getenv(
 
 
 def _extract_zone(items: list[str], kind: str) -> str:
-    """Extract numeric low-high zone from saved scanner confirmations."""
-    if kind == "fvg":
-        patterns = (r"Зона\s+FVG:\s*([^\n]+)",)
-    else:
-        patterns = (r"Order\s+Block:\s*([^\n]+)",)
+    """Extract FVG / Order Block price zones from scanner factor text.
 
+    Scanner wording changed between versions, so accept several common labels.
+    The static chart also has a candle-based fallback when no saved zone exists.
+    """
+    if kind == "fvg":
+        labels = (
+            r"(?:Зона\s+)?FVG",
+            r"Fair\s+Value\s+Gap",
+        )
+    else:
+        labels = (
+            r"Order\s*Block",
+            r"Ордер\s*блок",
+            r"\bOB\b",
+        )
+
+    number = r"-?\d+(?:[.,]\d+)?"
     for item in items:
         text = str(item or "")
-        for pattern in patterns:
-            match = re.search(pattern, text, flags=re.IGNORECASE)
+        for label in labels:
+            # Prefer two explicit prices after the label.
+            match = re.search(
+                rf"{label}[^\d-]*({number})\s*(?:-|–|—|до|\.\.)\s*({number})",
+                text,
+                flags=re.IGNORECASE,
+            )
             if match:
-                return match.group(1).strip()
+                return f"{match.group(1)}-{match.group(2)}".replace(",", ".")
+
+            # Fallback: take the first two numeric values on the same factor.
+            if re.search(label, text, flags=re.IGNORECASE):
+                values = re.findall(number, text)
+                if len(values) >= 2:
+                    return f"{values[0]}-{values[1]}".replace(",", ".")
     return ""
 
 
