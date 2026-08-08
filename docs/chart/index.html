@@ -44,7 +44,7 @@
   $('direction').textContent = dir || 'SIGNAL';
   $('direction').style.color = dir === 'SHORT' ? '#ea3943' : '#16c784';
 
-  function nums(v){ return (String(v||'').replace(/,/g,'.').match(/-?\d+(?:\.\d+)?/g)||[]).map(Number).filter(Number.isFinite); }
+  function nums(v){ return (String(v||'').replace(/,/g,'.').match(/\d+(?:\.\d+)?/g)||[]).map(Number).filter(n=>Number.isFinite(n) && n>0); }
   function first(v){ const a=nums(v); return a.length?a[0]:null; }
   function zone(v){ const a=nums(v); if(!a.length)return null; if(a.length===1)return [a[0],a[0]]; return [Math.min(a[0],a[1]),Math.max(a[0],a[1])]; }
   function midpoint(v){ const z=zone(v); return z?(z[0]+z[1])/2:null; }
@@ -59,6 +59,16 @@
     ob: zone(q.get('ob')),
     entryZone: zone(q.get('entry')),
   };
+
+  function validateLevelsAgainstMarket(lastPrice){
+    if(!Number.isFinite(lastPrice) || lastPrice<=0) return;
+    const sane = v => Number.isFinite(v) && v>0 && v>=lastPrice/100 && v<=lastPrice*100;
+    for(const k of ['entry','sl','tp1','tp2','tp3']){ if(!sane(levels[k])) levels[k]=null; }
+    for(const k of ['fvg','ob','entryZone']){
+      const z=levels[k];
+      if(z && (!sane(z[0]) || !sane(z[1]))) levels[k]=null;
+    }
+  }
 
   const chart = LightweightCharts.createChart($('chart'), {
     layout:{background:{color:'#080a0d'},textColor:'#a8b0bb'},
@@ -174,6 +184,7 @@
       const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`OKX ${r.status}`);
       const j=await r.json(); if(j.code!=='0'||!Array.isArray(j.data)) throw new Error(j.msg||'Нет свечей');
       const candles=j.data.map(x=>({time:Math.floor(Number(x[0])/1000),open:Number(x[1]),high:Number(x[2]),low:Number(x[3]),close:Number(x[4])})).reverse();
+      validateLevelsAgainstMarket(candles.length ? candles[candles.length-1].close : null);
       series.setData(candles);
       ensureStructureZones(candles);
       forcePriceRange(candles);
