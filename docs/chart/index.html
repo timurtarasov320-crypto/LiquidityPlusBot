@@ -10,9 +10,9 @@
     *{box-sizing:border-box}html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;overflow:hidden}
     .app{height:100%;display:flex;flex-direction:column}.top{height:58px;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);background:rgba(8,10,13,.96)}
     .logo{width:34px;height:34px;border:1px solid #654a0f;border-radius:9px;display:grid;place-items:center;color:var(--gold);font-weight:900}.title{min-width:0;flex:1}.title b{display:block;font-size:14px;letter-spacing:.4px}.title span{font-size:12px;color:var(--muted)}
-    .badge{font-size:12px;font-weight:800;padding:6px 9px;border:1px solid var(--line);border-radius:8px;white-space:nowrap}.chart-wrap{position:relative;flex:1;min-height:0}.chart{position:absolute;inset:0;z-index:1}.zones{position:absolute;inset:0;z-index:4;pointer-events:none;overflow:hidden}.zone{position:absolute;left:38%;right:74px;border:1.5px solid;border-radius:4px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);min-height:5px}.zone-label{position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:10px;font-weight:900;letter-spacing:.25px;text-shadow:0 1px 2px #000;background:rgba(8,10,13,.72);padding:2px 5px;border-radius:4px;white-space:nowrap}.status{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:10px 14px;background:#111820;border:1px solid var(--line);border-radius:10px;font-size:13px;color:var(--muted);z-index:5;max-width:85%;text-align:center}.bottom{height:42px;padding:0 12px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;background:#090c10;font-size:11px;color:var(--muted)}
+    .badge{font-size:12px;font-weight:800;padding:6px 9px;border:1px solid var(--line);border-radius:8px;white-space:nowrap}.chart-wrap{position:relative;flex:1;min-height:0}.chart{position:absolute;inset:0;z-index:1}.zones{position:absolute;inset:0;z-index:4;pointer-events:none;overflow:hidden}.zone{position:absolute;border:1.5px solid;border-radius:2px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.04);min-height:5px;overflow:hidden}.zone-label{position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:10px;font-weight:900;letter-spacing:.25px;text-shadow:0 1px 2px #000;background:rgba(8,10,13,.72);padding:2px 5px;border-radius:4px;white-space:nowrap}.status{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:10px 14px;background:#111820;border:1px solid var(--line);border-radius:10px;font-size:13px;color:var(--muted);z-index:5;max-width:85%;text-align:center}.bottom{height:42px;padding:0 12px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;background:#090c10;font-size:11px;color:var(--muted)}
     .bottom a{color:var(--gold);text-decoration:none}.open-tv{color:var(--text)!important;border:1px solid #4a3610;background:#171208;border-radius:7px;padding:6px 9px;font-weight:700}.hidden{display:none}
-    @media(max-width:520px){.top{height:54px;padding:0 10px}.badge{font-size:11px;padding:5px 7px}.bottom{font-size:10px}.zone{left:30%;right:58px}}
+    @media(max-width:520px){.top{height:54px;padding:0 10px}.badge{font-size:11px;padding:5px 7px}.bottom{font-size:10px}}
   </style>
 </head>
 <body>
@@ -125,12 +125,37 @@
     return null;
   }
 
+  function zoneGeometry(item, holderWidth){
+    const label=(item.label||'').toUpperCase();
+    // Geometry deliberately mimics TradingView-style structure boxes:
+    // FVG = wide imbalance area, OB = compact candle block, liquidity = medium pool.
+    if(label.includes('ORDER BLOCK')) return {left:Math.round(holderWidth*0.27), width:Math.round(holderWidth*0.22)};
+    if(label.includes('FVG')) return {left:Math.round(holderWidth*0.12), width:Math.round(holderWidth*0.48)};
+    if(label.includes('LIQUIDITY')) return {left:Math.round(holderWidth*0.58), width:Math.round(holderWidth*0.26)};
+    if(label.includes('ENTRY ZONE')) return {left:Math.round(holderWidth*0.46), width:Math.round(holderWidth*0.30)};
+    return {left:Math.round(holderWidth*0.30), width:Math.round(holderWidth*0.36)};
+  }
+
   function drawZones(){
     const holder=$('zones'); holder.innerHTML='';
+    const hw=holder.clientWidth || $('chart').clientWidth || 1000;
+    const hh=holder.clientHeight || $('chart').clientHeight || 600;
     for(const item of zoneSpecs){
       const y1=series.priceToCoordinate(item.z[1]); const y2=series.priceToCoordinate(item.z[0]);
       if(y1==null||y2==null) continue;
-      const d=document.createElement('div'); d.className='zone'; d.style.top=`${Math.min(y1,y2)}px`; d.style.height=`${Math.max(3,Math.abs(y2-y1))}px`; d.style.borderColor=item.color; d.style.background=`${item.color}2e`; d.style.boxShadow=`inset 3px 0 0 ${item.color}aa, inset 0 0 0 1px ${item.color}22`; 
+      let top=Math.min(y1,y2), height=Math.abs(y2-y1);
+      // Keep zones readable without letting tiny OB/FVG collapse into a line.
+      const isOb=(item.label||'').toUpperCase().includes('ORDER BLOCK');
+      const isLiq=(item.label||'').toUpperCase().includes('LIQUIDITY');
+      const minH=isOb ? 18 : (isLiq ? 14 : 26);
+      if(height<minH){ const mid=(y1+y2)/2; height=minH; top=mid-height/2; }
+      top=Math.max(1,Math.min(top,Math.max(1,hh-height-1)));
+      const g=zoneGeometry(item,hw);
+      const d=document.createElement('div'); d.className='zone';
+      d.style.left=`${g.left}px`; d.style.width=`${Math.max(56,g.width)}px`;
+      d.style.top=`${top}px`; d.style.height=`${Math.max(5,height)}px`;
+      d.style.borderColor=item.color; d.style.background=`${item.color}22`;
+      d.style.boxShadow=`inset 2px 0 0 ${item.color}b8, inset 0 0 0 1px ${item.color}1f`;
       const l=document.createElement('span'); l.className='zone-label'; l.style.color=item.color; l.textContent=item.label; d.appendChild(l); holder.appendChild(d);
     }
   }
